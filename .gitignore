@@ -13,6 +13,7 @@ node_modules/
 dist/
 .svelte-kit/
 *.log
+pnpm-debug.log*
 
 # Rust / Tauri
 src-tauri/target/
@@ -23,9 +24,15 @@ src-tauri/Cargo.lock
 *.db-journal
 *.sqlite
 *.sqlite-journal
+.env.local
 
 # Build artifacts
 build/
 *.dmg
 *.msi
 *.exe
+
+# Test artifacts
+coverage/
+playwright-report/
+test-results/
