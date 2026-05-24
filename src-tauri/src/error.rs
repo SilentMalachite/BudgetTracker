@@ -17,6 +17,9 @@ pub enum AppError {
     #[error("migration error: {0}")]
     Migration(String),
 
+    #[error("corrupt data: {0}")]
+    Corrupt(String),
+
     #[error("not found: {0}")]
     NotFound(String),
 
