@@ -18,6 +18,7 @@ pnpm-debug.log*
 # Rust / Tauri
 src-tauri/target/
 src-tauri/Cargo.lock
+src-tauri/gen/
 
 # Local data (will be created during development)
 *.db
