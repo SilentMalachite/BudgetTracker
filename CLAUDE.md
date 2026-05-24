@@ -8,9 +8,9 @@ macOS / Windows 両対応の家計簿デスクトップアプリ。Tauri + Svelt
 
 ## 現在の状態
 
-- 設計フェーズ完了、実装未着手
+- Phase 1 完了 (スキャフォールド + SQLCipher/Keychain 基盤)
 - 既存の `家計簿.html` は参考用のプロトタイプ。**移植せず新規実装する**
-- 実装は spec の Phase 1〜5 を順に進める
+- 次は spec の Phase 2 (取引 CRUD + カテゴリ + ダッシュボード)
 
 ## 技術スタック
 
@@ -94,24 +94,37 @@ spec を先に更新する。コードと spec を同期させること。spec �
 
 ## 開発コマンド
 
-実装着手後に以下を追記する。現時点では未定。
+````bash
+# Dev サーバー起動 (Tauri ウィンドウ)
+pnpm tauri dev
 
-```
-# Dev サーバー起動
-# pnpm tauri dev
+# Web のみ (Tauri なし、ブラウザで http://localhost:1420)
+pnpm dev
 
 # Rust テスト
-# cargo test --manifest-path src-tauri/Cargo.toml
+cd src-tauri && cargo test
+
+# Rust lint
+cd src-tauri && cargo clippy --all-targets -- -D warnings
 
 # フロントテスト
-# pnpm test
+pnpm test
+
+# 型チェック
+pnpm check
+
+# E2E (Vite dev server に対する Playwright)
+pnpm test:e2e
 
 # 配布ビルド (macOS)
-# pnpm tauri build --target universal-apple-darwin
+pnpm tauri build --target universal-apple-darwin
 
 # 配布ビルド (Windows)
-# pnpm tauri build --target x86_64-pc-windows-msvc
-```
+pnpm tauri build --target x86_64-pc-windows-msvc
+````
+
+### E2E の制約 (Phase 1)
+現状の E2E はブラウザ (`pnpm dev`) に対する Playwright スモークのみ。Tauri ウィンドウ上の E2E は `tauri-driver` 統合が必要で、Phase 2 以降の課題。Tauri ウィンドウ上での動作確認は `pnpm tauri dev` での手動確認で代替する。
 
 ## 参考: 既存 `家計簿.html` の扱い
 
