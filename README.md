@@ -105,3 +105,7 @@ GitHub Actions で macOS + Windows の test/lint/build matrix を実行。詳細
 ## 参考
 
 ルート直下の `家計簿.html` は本プロジェクトの出発点となった単一HTMLプロトタイプ。UI 配色とカテゴリ管理パターンを参考にするが、コードは移植せず Rust + Svelte で再実装している。
+
+## ライセンス
+
+[MIT License](LICENSE) © 2026 Silent Malachite

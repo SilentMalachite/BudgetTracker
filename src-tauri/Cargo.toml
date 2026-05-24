@@ -5,6 +5,7 @@ description = "Cross-platform desktop budget tracker"
 authors = ["BudgetTracker Authors"]
 edition = "2021"
 rust-version = "1.78"
+license = "MIT"
 
 [lib]
 name = "budget_tracker_lib"
