@@ -20,9 +20,11 @@ pub enum AppError {
     #[error("corrupt data: {0}")]
     Corrupt(String),
 
+    #[allow(dead_code)]
     #[error("not found: {0}")]
     NotFound(String),
 
+    #[allow(dead_code)]
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
 }
