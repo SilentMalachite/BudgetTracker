@@ -87,15 +87,6 @@ fn current_version(conn: &Connection) -> AppResult<u32> {
         .unwrap_or(0))
 }
 
-fn set_version(conn: &Connection, version: u32) -> AppResult<()> {
-    conn.execute(
-        "INSERT INTO app_meta(key, value) VALUES('schema_version', ?1)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        params![version.to_string()],
-    )?;
-    Ok(())
-}
-
 /// Apply all pending migrations against `conn`. Returns the new schema_version.
 pub fn run(conn: &mut Connection) -> AppResult<u32> {
     let mut version = current_version(conn)?;
@@ -115,7 +106,6 @@ pub fn run(conn: &mut Connection) -> AppResult<u32> {
         tx.commit()?;
         version = m.version;
     }
-    set_version(conn, version)?;
     Ok(version)
 }
 
