@@ -1,0 +1,98 @@
+use std::path::Path;
+
+use rusqlite::Connection;
+
+use crate::error::AppResult;
+use crate::infra::keychain::{DbKey, KEY_LEN};
+
+fn key_to_hex(key: &DbKey) -> String {
+    let mut s = String::with_capacity(KEY_LEN * 2);
+    for b in key {
+        use std::fmt::Write as _;
+        let _ = write!(&mut s, "{:02x}", b);
+    }
+    s
+}
+
+/// Open a SQLCipher-encrypted SQLite database at `path`. Creates the file if
+/// absent. The connection has `PRAGMA key` applied. Foreign keys are enabled.
+pub fn open_encrypted(path: &Path, key: &DbKey) -> AppResult<Connection> {
+    let conn = Connection::open(path)?;
+    let hex = key_to_hex(key);
+    // PRAGMA key with raw bytes form `x'<hex>'` is safe against SQL injection
+    // because hex is from our own 32-byte buffer.
+    conn.pragma_update(None, "key", format!("x'{hex}'"))?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    // Touch the database to force PRAGMA key to take effect on first use.
+    conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))?;
+    Ok(conn)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn make_key(seed: u8) -> DbKey {
+        let mut k = [0u8; KEY_LEN];
+        for (i, slot) in k.iter_mut().enumerate() {
+            *slot = seed.wrapping_add(i as u8);
+        }
+        k
+    }
+
+    #[test]
+    fn round_trip_data_through_encrypted_db() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("data.db");
+        let key = make_key(7);
+
+        {
+            let conn = open_encrypted(&path, &key).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT NOT NULL);
+                 INSERT INTO t(v) VALUES('hello');",
+            )
+            .unwrap();
+        }
+
+        let conn = open_encrypted(&path, &key).unwrap();
+        let v: String = conn.query_row("SELECT v FROM t WHERE id=1", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, "hello");
+    }
+
+    #[test]
+    fn wrong_key_fails_to_decrypt() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("data.db");
+        let right = make_key(1);
+        let wrong = make_key(2);
+
+        {
+            let conn = open_encrypted(&path, &right).unwrap();
+            conn.execute_batch("CREATE TABLE t(id INTEGER); INSERT INTO t VALUES(1);")
+                .unwrap();
+        }
+
+        let bad = open_encrypted(&path, &wrong);
+        assert!(bad.is_err(), "opening with wrong key must fail");
+    }
+
+    #[test]
+    fn raw_file_does_not_contain_plaintext() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("data.db");
+        let key = make_key(42);
+        let conn = open_encrypted(&path, &key).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE t(v TEXT); INSERT INTO t(v) VALUES('SUPERSECRET_TOKEN');",
+        )
+        .unwrap();
+        drop(conn);
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(
+            !bytes.windows(17).any(|w| w == b"SUPERSECRET_TOKEN"),
+            "plaintext leaked into encrypted db file"
+        );
+    }
+}
