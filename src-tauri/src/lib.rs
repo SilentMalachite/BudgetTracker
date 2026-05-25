@@ -57,6 +57,8 @@ pub fn run() {
             commands::transactions::create_transaction,
             commands::transactions::update_transaction,
             commands::transactions::delete_transaction,
+            commands::transactions::create_transfer,
+            commands::transactions::update_transfer,
             commands::reports::monthly_summary,
             commands::reports::monthly_series,
             commands::backup::export_json,

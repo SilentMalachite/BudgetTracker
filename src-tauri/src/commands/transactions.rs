@@ -171,6 +171,102 @@ pub fn delete_transaction(app: AppHandle, state: State<'_, AppState>, id: i64) -
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CreateTransferInput {
+    pub occurred_on: String,
+    pub amount: i64,
+    pub account_id: i64,
+    pub counter_account_id: i64,
+    #[serde(default)]
+    pub description: String,
+}
+
+#[tauri::command]
+pub fn create_transfer(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    input: CreateTransferInput,
+) -> AppResult<Transaction> {
+    let validated = ledger::validate_transfer_input(&ledger::RawTransferInput {
+        occurred_on: &input.occurred_on,
+        amount: input.amount,
+        account_id: input.account_id,
+        counter_account_id: input.counter_account_id,
+        description: &input.description,
+    })?;
+    let now = now_iso();
+    let mut conn = state
+        .conn
+        .lock()
+        .map_err(|_| AppError::Corrupt("connection mutex poisoned".into()))?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let id = transaction_repo::insert_transfer(
+        &tx,
+        &transaction_repo::InsertTransferInput {
+            occurred_on: &validated.occurred_on,
+            amount: validated.amount,
+            account_id: validated.account_id,
+            counter_account_id: validated.counter_account_id,
+            description: &validated.description,
+            now: &now,
+        },
+    )?;
+    let transaction = transaction_repo::find_by_id(&tx, id)?;
+    tx.commit()?;
+    drop(conn);
+    emit_changed(&app, ChangedDomain::Transactions);
+    Ok(transaction)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateTransferPatch {
+    pub occurred_on: String,
+    pub amount: i64,
+    pub account_id: i64,
+    pub counter_account_id: i64,
+    #[serde(default)]
+    pub description: String,
+}
+
+#[tauri::command]
+pub fn update_transfer(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+    patch: UpdateTransferPatch,
+) -> AppResult<Transaction> {
+    let validated = ledger::validate_transfer_input(&ledger::RawTransferInput {
+        occurred_on: &patch.occurred_on,
+        amount: patch.amount,
+        account_id: patch.account_id,
+        counter_account_id: patch.counter_account_id,
+        description: &patch.description,
+    })?;
+    let now = now_iso();
+    let mut conn = state
+        .conn
+        .lock()
+        .map_err(|_| AppError::Corrupt("connection mutex poisoned".into()))?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    transaction_repo::update_transfer(
+        &tx,
+        id,
+        &transaction_repo::UpdateTransferInput {
+            occurred_on: &validated.occurred_on,
+            amount: validated.amount,
+            account_id: validated.account_id,
+            counter_account_id: validated.counter_account_id,
+            description: &validated.description,
+            now: &now,
+        },
+    )?;
+    let transaction = transaction_repo::find_by_id(&tx, id)?;
+    tx.commit()?;
+    drop(conn);
+    emit_changed(&app, ChangedDomain::Transactions);
+    Ok(transaction)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,6 +283,21 @@ mod tests {
             }"#,
         )
         .unwrap();
+        assert_eq!(input.description, "");
+    }
+
+    #[test]
+    fn create_transfer_input_accepts_minimal_payload() {
+        let input: CreateTransferInput = serde_json::from_str(
+            r#"{
+                "occurred_on": "2026-05-25",
+                "amount": 30000,
+                "account_id": 1,
+                "counter_account_id": 2
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(input.amount, 30_000);
         assert_eq!(input.description, "");
     }
 }

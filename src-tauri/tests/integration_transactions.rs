@@ -135,7 +135,11 @@ fn filter_by_search_and_type() {
 }
 
 #[test]
-fn list_excludes_transfer_rows_at_sql_level() {
+fn list_includes_transfer_rows_after_slice_02() {
+    // Phase 3 Slice 02 removed the `type IN ('income','expense')` clamp from
+    // `transaction_repo::build_where` so the Transactions page can list transfers
+    // alongside income/expense. Income/expense aggregates in `report_repo`
+    // continue to filter `type IN ('income','expense')` at the SQL level.
     let (conn, acc, cat) = seeded_db();
     transaction_repo::insert(
         &conn,
@@ -150,20 +154,37 @@ fn list_excludes_transfer_rows_at_sql_level() {
         },
     )
     .unwrap();
-    conn.execute(
-        "INSERT INTO transactions(
-            occurred_on, type, amount, account_id, counter_account_id, category_id,
-            description, created_at, updated_at
-        ) VALUES (?1, 'transfer', 999999, ?2, ?2, NULL, 'hidden transfer', ?3, ?3)",
-        rusqlite::params!["2026-05-11", acc, NOW],
+    // Insert a second account so the transfer source != destination.
+    let other_acc = budget_tracker_lib::infra::repo::account_repo::insert(
+        &conn,
+        &budget_tracker_lib::infra::repo::account_repo::InsertInput {
+            name: "other",
+            kind: budget_tracker_lib::domain::account::AccountKind::Bank,
+            currency: "JPY",
+            initial_balance: 0,
+            display_order: 1,
+            note: "",
+            now: NOW,
+        },
+    )
+    .unwrap();
+    transaction_repo::insert_transfer(
+        &conn,
+        &transaction_repo::InsertTransferInput {
+            occurred_on: "2026-05-11",
+            amount: 999_999,
+            account_id: acc,
+            counter_account_id: other_acc,
+            description: "visible transfer",
+            now: NOW,
+        },
     )
     .unwrap();
 
     let (items, total) =
         transaction_repo::list(&conn, &transaction_repo::ListFilter::default(), 0, 50).unwrap();
-    assert_eq!(total, 1);
-    assert_eq!(items.len(), 1);
-    assert_eq!(items[0].description, "visible");
+    assert_eq!(total, 2);
+    assert_eq!(items.len(), 2);
 }
 
 #[test]
