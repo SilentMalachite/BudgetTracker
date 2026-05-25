@@ -121,7 +121,7 @@ mod tests {
     fn applies_v001_to_empty_db() {
         let mut conn = fresh();
         let v = run(&mut conn).unwrap();
-        assert_eq!(v, 1);
+        assert!(v >= 1, "expected V001 applied, got {v}");
         let names: Vec<String> = conn
             .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
             .unwrap()
@@ -147,7 +147,23 @@ mod tests {
         let v1 = run(&mut conn).unwrap();
         let v2 = run(&mut conn).unwrap();
         assert_eq!(v1, v2);
-        assert_eq!(v2, 1);
+        assert!(v2 >= 2, "expected at least V002, got {v2}");
+    }
+
+    #[test]
+    fn applies_v002_counter_account_index() {
+        let mut conn = fresh();
+        let version = run(&mut conn).unwrap();
+        assert!(version >= 2, "expected V002 applied, got {version}");
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                  WHERE type='index' AND name='idx_tx_counter_account'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(exists, 1, "idx_tx_counter_account index must exist after V002");
     }
 
     #[test]
