@@ -62,7 +62,8 @@ fn build_where(filter: &ListFilter) -> (String, Vec<Box<dyn ToSql>>) {
         binds.push(Box::new(cat));
     }
     if let Some(acc) = filter.account_id {
-        clauses.push("account_id = ?".into());
+        clauses.push("(account_id = ? OR (type = 'transfer' AND counter_account_id = ?))".into());
+        binds.push(Box::new(acc));
         binds.push(Box::new(acc));
     }
     if let Some(q) = &filter.search {
@@ -228,7 +229,11 @@ pub struct UpdateTransferInput<'a> {
     pub now: &'a str,
 }
 
-pub fn update_transfer(conn: &Connection, id: i64, input: &UpdateTransferInput<'_>) -> AppResult<()> {
+pub fn update_transfer(
+    conn: &Connection,
+    id: i64,
+    input: &UpdateTransferInput<'_>,
+) -> AppResult<()> {
     let n = conn.execute(
         "UPDATE transactions
             SET occurred_on = ?1, type = 'transfer', amount = ?2, account_id = ?3,

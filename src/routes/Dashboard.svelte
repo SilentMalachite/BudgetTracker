@@ -219,7 +219,7 @@
                   class:income={transaction.type === 'income'}
                   class:expense={transaction.type === 'expense'}
                 >
-                  {transaction.type === 'expense' ? '-' : '+'}{yen.format(transaction.amount)}
+                  {#if transaction.type === 'expense'}-{:else if transaction.type === 'income'}+{/if}{yen.format(transaction.amount)}
                 </span>
               </li>
             {/each}

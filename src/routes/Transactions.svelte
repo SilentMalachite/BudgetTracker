@@ -23,7 +23,7 @@
 
   const txStore = createTransactionsStore({}, 50);
   const catStore = createCategoriesStore({ include_archived: false });
-  const accStore = createAccountsStore(false);
+  const accStore = createAccountsStore(true);
 
   onDestroy(() => {
     void txStore.dispose();

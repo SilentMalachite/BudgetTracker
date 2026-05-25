@@ -80,13 +80,8 @@ fn transfer_appears_in_list_unfiltered() {
     )
     .unwrap();
 
-    let (items, total) = transaction_repo::list(
-        &conn,
-        &transaction_repo::ListFilter::default(),
-        0,
-        50,
-    )
-    .unwrap();
+    let (items, total) =
+        transaction_repo::list(&conn, &transaction_repo::ListFilter::default(), 0, 50).unwrap();
     assert_eq!(total, 1);
     assert!(matches!(items[0].type_, TxType::Transfer));
 }
@@ -119,6 +114,38 @@ fn list_can_filter_by_transfer_type() {
     .unwrap();
     assert_eq!(total, 1);
     assert_eq!(items.len(), 1);
+}
+
+#[test]
+fn account_filter_includes_inbound_transfer_rows() {
+    let (conn, cash, bank) = seeded_db();
+    transaction_repo::insert_transfer(
+        &conn,
+        &transaction_repo::InsertTransferInput {
+            occurred_on: "2026-05-25",
+            amount: 10_000,
+            account_id: cash,
+            counter_account_id: bank,
+            description: "to bank",
+            now: NOW,
+        },
+    )
+    .unwrap();
+
+    let (items, total) = transaction_repo::list(
+        &conn,
+        &transaction_repo::ListFilter {
+            account_id: Some(bank),
+            ..Default::default()
+        },
+        0,
+        50,
+    )
+    .unwrap();
+
+    assert_eq!(total, 1);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].counter_account_id, Some(bank));
 }
 
 #[test]

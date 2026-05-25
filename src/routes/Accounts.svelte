@@ -107,6 +107,9 @@
 
   <Card>
     {#snippet children()}
+      {#if balances.error}
+        <small class="error">残高を取得できません: {balances.error}</small>
+      {/if}
       {#if visible.length === 0 && !store.loading}
         <EmptyState title="口座がありません" hint="右上の「+ 追加」から作成してください" />
       {:else}
@@ -118,12 +121,18 @@
                 <strong>{account.name}</strong>
                 <small>{ACCOUNT_KIND_LABELS[account.kind]}</small>
               </div>
-              <span class="balance" data-testid={`account-balance-${account.id}`}>
-                <strong>{yen.format(balanceById.get(account.id) ?? account.initial_balance)}</strong>
-                {#if (balanceById.get(account.id) ?? account.initial_balance) !== account.initial_balance}
-                  <small>初期 {yen.format(account.initial_balance)}</small>
-                {/if}
-              </span>
+              {#if balances.error}
+                <span class="balance unavailable" data-testid={`account-balance-${account.id}`}>
+                  <strong>取得できません</strong>
+                </span>
+              {:else}
+                <span class="balance" data-testid={`account-balance-${account.id}`}>
+                  <strong>{yen.format(balanceById.get(account.id) ?? account.initial_balance)}</strong>
+                  {#if (balanceById.get(account.id) ?? account.initial_balance) !== account.initial_balance}
+                    <small>初期 {yen.format(account.initial_balance)}</small>
+                  {/if}
+                </span>
+              {/if}
               <Button variant="ghost" onclick={() => openEdit(account)}>
                 {#snippet children()}編集{/snippet}
               </Button>
