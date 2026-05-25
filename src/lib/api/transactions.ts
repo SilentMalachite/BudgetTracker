@@ -67,3 +67,24 @@ export function updateTransaction(
 export function deleteTransaction(id: number): Promise<void> {
   return invoke('delete_transaction', { id });
 }
+
+export type CreateTransferInput = {
+  occurred_on: string;
+  amount: number;
+  account_id: number;
+  counter_account_id: number;
+  description?: string;
+};
+
+export function createTransfer(input: CreateTransferInput): Promise<Transaction> {
+  return invoke<Transaction>('create_transfer', { input });
+}
+
+export type UpdateTransferPatch = CreateTransferInput;
+
+export function updateTransfer(
+  id: number,
+  patch: UpdateTransferPatch,
+): Promise<Transaction> {
+  return invoke<Transaction>('update_transfer', { id, patch });
+}

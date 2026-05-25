@@ -62,3 +62,42 @@ describe('transactions api', () => {
     expect(invokeMock).toHaveBeenCalledWith('delete_transaction', { id: 7 });
   });
 });
+
+import { createTransfer, updateTransfer } from './transactions';
+
+describe('transfer api', () => {
+  beforeEach(() => invokeMock.mockReset());
+
+  it('wraps input under "input" for create_transfer', async () => {
+    invokeMock.mockResolvedValueOnce({});
+    await createTransfer({
+      occurred_on: '2026-05-25',
+      amount: 50_000,
+      account_id: 1,
+      counter_account_id: 2,
+      description: 'ATM',
+    });
+    expect(invokeMock).toHaveBeenCalledWith('create_transfer', {
+      input: expect.objectContaining({
+        account_id: 1,
+        counter_account_id: 2,
+        amount: 50_000,
+      }),
+    });
+  });
+
+  it('wraps id+patch for update_transfer', async () => {
+    invokeMock.mockResolvedValueOnce({});
+    await updateTransfer(42, {
+      occurred_on: '2026-05-25',
+      amount: 10,
+      account_id: 1,
+      counter_account_id: 2,
+      description: '',
+    });
+    expect(invokeMock).toHaveBeenCalledWith('update_transfer', {
+      id: 42,
+      patch: expect.objectContaining({ amount: 10 }),
+    });
+  });
+});
