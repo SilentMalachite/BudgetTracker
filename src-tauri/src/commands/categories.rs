@@ -1,3 +1,4 @@
+use rusqlite::TransactionBehavior;
 use serde::{Deserialize, Deserializer};
 use tauri::{AppHandle, State};
 
@@ -63,13 +64,14 @@ pub fn create_category(
         Some(c) => Some(category::validate_color(c)?),
         None => None,
     };
-    let conn = state
+    let mut conn = state
         .conn
         .lock()
         .map_err(|_| AppError::Corrupt("connection mutex poisoned".into()))?;
-    let order = category_repo::next_display_order(&conn, type_)?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let order = category_repo::next_display_order(&tx, type_)?;
     let id = category_repo::insert(
-        &conn,
+        &tx,
         &category_repo::InsertInput {
             name: &name,
             type_,
@@ -78,7 +80,8 @@ pub fn create_category(
             display_order: order,
         },
     )?;
-    let cat = category_repo::find_by_id(&conn, id)?;
+    let cat = category_repo::find_by_id(&tx, id)?;
+    tx.commit()?;
     drop(conn);
     emit_changed(&app, ChangedDomain::Categories);
     Ok(cat)
@@ -125,12 +128,13 @@ pub fn update_category(
         NullablePatch::Value(None) => NullablePatch::Value(None),
         NullablePatch::Missing => NullablePatch::Missing,
     };
-    let conn = state
+    let mut conn = state
         .conn
         .lock()
         .map_err(|_| AppError::Corrupt("connection mutex poisoned".into()))?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     category_repo::update(
-        &conn,
+        &tx,
         id,
         &category_repo::UpdatePatch {
             name: name.as_deref(),
@@ -145,7 +149,8 @@ pub fn update_category(
             display_order: patch.display_order,
         },
     )?;
-    let cat = category_repo::find_by_id(&conn, id)?;
+    let cat = category_repo::find_by_id(&tx, id)?;
+    tx.commit()?;
     drop(conn);
     emit_changed(&app, ChangedDomain::Categories);
     Ok(cat)
@@ -153,11 +158,13 @@ pub fn update_category(
 
 #[tauri::command]
 pub fn archive_category(app: AppHandle, state: State<'_, AppState>, id: i64) -> AppResult<()> {
-    let conn = state
+    let mut conn = state
         .conn
         .lock()
         .map_err(|_| AppError::Corrupt("connection mutex poisoned".into()))?;
-    category_repo::set_archived(&conn, id, Some(&now_iso()))?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    category_repo::set_archived(&tx, id, Some(&now_iso()))?;
+    tx.commit()?;
     drop(conn);
     emit_changed(&app, ChangedDomain::Categories);
     Ok(())
@@ -165,11 +172,13 @@ pub fn archive_category(app: AppHandle, state: State<'_, AppState>, id: i64) -> 
 
 #[tauri::command]
 pub fn unarchive_category(app: AppHandle, state: State<'_, AppState>, id: i64) -> AppResult<()> {
-    let conn = state
+    let mut conn = state
         .conn
         .lock()
         .map_err(|_| AppError::Corrupt("connection mutex poisoned".into()))?;
-    category_repo::set_archived(&conn, id, None)?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    category_repo::set_archived(&tx, id, None)?;
+    tx.commit()?;
     drop(conn);
     emit_changed(&app, ChangedDomain::Categories);
     Ok(())

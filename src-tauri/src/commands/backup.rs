@@ -1,4 +1,6 @@
-use rusqlite::{params, TransactionBehavior};
+use std::collections::HashMap;
+
+use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, State};
@@ -17,8 +19,26 @@ struct Snapshot {
     exported_at: String,
     categories: Vec<serde_json::Value>,
     accounts: Vec<serde_json::Value>,
+    recurring_rules: Vec<serde_json::Value>,
     transactions: Vec<serde_json::Value>,
+    budgets: Vec<serde_json::Value>,
     app_meta: Vec<serde_json::Value>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ImportMode {
+    Overwrite,
+    Append,
+}
+
+impl ImportMode {
+    fn parse(raw: &str) -> AppResult<Self> {
+        match raw {
+            "overwrite" => Ok(Self::Overwrite),
+            "append" => Ok(Self::Append),
+            other => Err(AppError::InvalidArgument(format!("unknown mode '{other}'"))),
+        }
+    }
 }
 
 fn select_all(
@@ -81,6 +101,30 @@ pub fn export_snapshot_json(conn: &rusqlite::Connection) -> AppResult<String> {
                 "updated_at",
             ],
         )?,
+        recurring_rules: select_all(
+            conn,
+            "SELECT id, name, type, amount, account_id, counter_account_id, category_id,
+                    description, frequency, day_of_month, day_of_week, starts_on, ends_on,
+                    last_generated_on, active
+               FROM recurring_rules ORDER BY id",
+            &[
+                "id",
+                "name",
+                "type",
+                "amount",
+                "account_id",
+                "counter_account_id",
+                "category_id",
+                "description",
+                "frequency",
+                "day_of_month",
+                "day_of_week",
+                "starts_on",
+                "ends_on",
+                "last_generated_on",
+                "active",
+            ],
+        )?,
         transactions: select_all(
             conn,
             "SELECT id, occurred_on, type, amount, account_id, counter_account_id,
@@ -98,6 +142,20 @@ pub fn export_snapshot_json(conn: &rusqlite::Connection) -> AppResult<String> {
                 "recurring_id",
                 "created_at",
                 "updated_at",
+            ],
+        )?,
+        budgets: select_all(
+            conn,
+            "SELECT id, category_id, period, amount, starts_on, ends_on, alert_threshold
+               FROM budgets ORDER BY id",
+            &[
+                "id",
+                "category_id",
+                "period",
+                "amount",
+                "starts_on",
+                "ends_on",
+                "alert_threshold",
             ],
         )?,
         app_meta: select_all(
@@ -133,23 +191,406 @@ pub struct ImportResult {
     pub warnings: Vec<String>,
 }
 
-fn exists(tx: &rusqlite::Transaction<'_>, table: &str, id: i64) -> AppResult<bool> {
-    let sql = format!("SELECT COUNT(*) FROM {table} WHERE id = ?1");
-    let count: i64 = tx.query_row(&sql, params![id], |row| row.get(0))?;
-    Ok(count > 0)
+fn value_i64(row: &serde_json::Value, key: &str) -> Option<i64> {
+    row.get(key).and_then(|v| v.as_i64())
 }
 
-fn handle_category_error(
-    result: rusqlite::Result<usize>,
+fn value_str<'a>(row: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    row.get(key).and_then(|v| v.as_str())
+}
+
+fn require_i64(row: &serde_json::Value, key: &str, label: &str) -> AppResult<i64> {
+    value_i64(row, key)
+        .ok_or_else(|| AppError::InvalidArgument(format!("{label} missing required {key}")))
+}
+
+fn resolve_required(
+    map: &HashMap<i64, i64>,
+    old_id: i64,
+    label: &str,
+    mode: ImportMode,
     warnings: &mut Vec<String>,
+) -> AppResult<Option<i64>> {
+    if let Some(new_id) = map.get(&old_id) {
+        return Ok(Some(*new_id));
+    }
+    let message = format!("skipped {label} referencing missing id {old_id}");
+    if mode == ImportMode::Append {
+        warnings.push(message);
+        Ok(None)
+    } else {
+        Err(AppError::InvalidArgument(message))
+    }
+}
+
+fn resolve_optional(
+    map: &HashMap<i64, i64>,
+    old_id: Option<i64>,
+    label: &str,
+    mode: ImportMode,
+    warnings: &mut Vec<String>,
+) -> AppResult<Option<Option<i64>>> {
+    match old_id {
+        Some(id) => resolve_required(map, id, label, mode, warnings).map(|v| v.map(Some)),
+        None => Ok(Some(None)),
+    }
+}
+
+fn existing_category_id(
+    tx: &rusqlite::Transaction<'_>,
     name: &str,
+    type_: &str,
+) -> AppResult<Option<i64>> {
+    tx.query_row(
+        "SELECT id FROM categories WHERE name = ?1 AND type = ?2",
+        params![name, type_],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(AppError::Db)
+}
+
+fn insert_account(
+    tx: &rusqlite::Transaction<'_>,
+    account: &serde_json::Value,
+    mode: ImportMode,
+) -> AppResult<i64> {
+    if mode == ImportMode::Overwrite {
+        tx.execute(
+            "INSERT INTO accounts(id, name, kind, currency, initial_balance, display_order,
+                                  note, archived_at, created_at, updated_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                value_i64(account, "id"),
+                value_str(account, "name").unwrap_or(""),
+                value_str(account, "kind").unwrap_or("cash"),
+                value_str(account, "currency").unwrap_or("JPY"),
+                value_i64(account, "initial_balance").unwrap_or(0),
+                value_i64(account, "display_order").unwrap_or(0),
+                value_str(account, "note").unwrap_or(""),
+                value_str(account, "archived_at"),
+                value_str(account, "created_at").unwrap_or("1970-01-01T00:00:00Z"),
+                value_str(account, "updated_at").unwrap_or("1970-01-01T00:00:00Z"),
+            ],
+        )?;
+        Ok(value_i64(account, "id").unwrap_or_else(|| tx.last_insert_rowid()))
+    } else {
+        tx.execute(
+            "INSERT INTO accounts(name, kind, currency, initial_balance, display_order,
+                                  note, archived_at, created_at, updated_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                value_str(account, "name").unwrap_or(""),
+                value_str(account, "kind").unwrap_or("cash"),
+                value_str(account, "currency").unwrap_or("JPY"),
+                value_i64(account, "initial_balance").unwrap_or(0),
+                value_i64(account, "display_order").unwrap_or(0),
+                value_str(account, "note").unwrap_or(""),
+                value_str(account, "archived_at"),
+                value_str(account, "created_at").unwrap_or("1970-01-01T00:00:00Z"),
+                value_str(account, "updated_at").unwrap_or("1970-01-01T00:00:00Z"),
+            ],
+        )?;
+        Ok(tx.last_insert_rowid())
+    }
+}
+
+fn insert_category(
+    tx: &rusqlite::Transaction<'_>,
+    category: &serde_json::Value,
+    mode: ImportMode,
+    warnings: &mut Vec<String>,
+) -> AppResult<Option<(i64, bool)>> {
+    let name = value_str(category, "name").unwrap_or("");
+    let type_ = value_str(category, "type").unwrap_or("expense");
+    let result = if mode == ImportMode::Overwrite {
+        tx.execute(
+            "INSERT INTO categories(id, name, type, color, icon, display_order, archived_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                value_i64(category, "id"),
+                name,
+                type_,
+                value_str(category, "color"),
+                value_str(category, "icon"),
+                value_i64(category, "display_order").unwrap_or(0),
+                value_str(category, "archived_at"),
+            ],
+        )
+    } else {
+        tx.execute(
+            "INSERT INTO categories(name, type, color, icon, display_order, archived_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                name,
+                type_,
+                value_str(category, "color"),
+                value_str(category, "icon"),
+                value_i64(category, "display_order").unwrap_or(0),
+                value_str(category, "archived_at"),
+            ],
+        )
+    };
+
+    match result {
+        Ok(_) => Ok(Some((
+            if mode == ImportMode::Overwrite {
+                value_i64(category, "id").unwrap_or_else(|| tx.last_insert_rowid())
+            } else {
+                tx.last_insert_rowid()
+            },
+            true,
+        ))),
+        Err(rusqlite::Error::SqliteFailure(err, _))
+            if mode == ImportMode::Append
+                && err.code == rusqlite::ErrorCode::ConstraintViolation =>
+        {
+            let Some(existing_id) = existing_category_id(tx, name, type_)? else {
+                return Err(AppError::Conflict(format!(
+                    "duplicate category without matching row: {name}"
+                )));
+            };
+            warnings.push(format!("skipped duplicate category: {name}"));
+            Ok(Some((existing_id, false)))
+        }
+        Err(e) => Err(AppError::Db(e)),
+    }
+}
+
+fn insert_recurring_rule(
+    tx: &rusqlite::Transaction<'_>,
+    rule: &serde_json::Value,
+    mode: ImportMode,
+    accounts: &HashMap<i64, i64>,
+    categories: &HashMap<i64, i64>,
+    warnings: &mut Vec<String>,
+) -> AppResult<Option<i64>> {
+    let old_account = require_i64(rule, "account_id", "recurring rule")?;
+    let Some(account_id) = resolve_required(
+        accounts,
+        old_account,
+        "recurring rule account",
+        mode,
+        warnings,
+    )?
+    else {
+        return Ok(None);
+    };
+    let Some(counter_account_id) = resolve_optional(
+        accounts,
+        value_i64(rule, "counter_account_id"),
+        "recurring rule counter account",
+        mode,
+        warnings,
+    )?
+    else {
+        return Ok(None);
+    };
+    let Some(category_id) = resolve_optional(
+        categories,
+        value_i64(rule, "category_id"),
+        "recurring rule category",
+        mode,
+        warnings,
+    )?
+    else {
+        return Ok(None);
+    };
+
+    if mode == ImportMode::Overwrite {
+        tx.execute(
+            "INSERT INTO recurring_rules(id, name, type, amount, account_id, counter_account_id,
+                                         category_id, description, frequency, day_of_month,
+                                         day_of_week, starts_on, ends_on, last_generated_on, active)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![
+                value_i64(rule, "id"),
+                value_str(rule, "name").unwrap_or(""),
+                value_str(rule, "type").unwrap_or("expense"),
+                value_i64(rule, "amount").unwrap_or(0),
+                account_id,
+                counter_account_id,
+                category_id,
+                value_str(rule, "description").unwrap_or(""),
+                value_str(rule, "frequency").unwrap_or("monthly"),
+                value_i64(rule, "day_of_month"),
+                value_i64(rule, "day_of_week"),
+                value_str(rule, "starts_on").unwrap_or("1970-01-01"),
+                value_str(rule, "ends_on"),
+                value_str(rule, "last_generated_on"),
+                value_i64(rule, "active").unwrap_or(1),
+            ],
+        )?;
+        Ok(Some(
+            value_i64(rule, "id").unwrap_or_else(|| tx.last_insert_rowid()),
+        ))
+    } else {
+        tx.execute(
+            "INSERT INTO recurring_rules(name, type, amount, account_id, counter_account_id,
+                                         category_id, description, frequency, day_of_month,
+                                         day_of_week, starts_on, ends_on, last_generated_on, active)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                value_str(rule, "name").unwrap_or(""),
+                value_str(rule, "type").unwrap_or("expense"),
+                value_i64(rule, "amount").unwrap_or(0),
+                account_id,
+                counter_account_id,
+                category_id,
+                value_str(rule, "description").unwrap_or(""),
+                value_str(rule, "frequency").unwrap_or("monthly"),
+                value_i64(rule, "day_of_month"),
+                value_i64(rule, "day_of_week"),
+                value_str(rule, "starts_on").unwrap_or("1970-01-01"),
+                value_str(rule, "ends_on"),
+                value_str(rule, "last_generated_on"),
+                value_i64(rule, "active").unwrap_or(1),
+            ],
+        )?;
+        Ok(Some(tx.last_insert_rowid()))
+    }
+}
+
+fn insert_transaction(
+    tx: &rusqlite::Transaction<'_>,
+    transaction: &serde_json::Value,
+    mode: ImportMode,
+    accounts: &HashMap<i64, i64>,
+    categories: &HashMap<i64, i64>,
+    recurring_rules: &HashMap<i64, i64>,
+    warnings: &mut Vec<String>,
 ) -> AppResult<bool> {
+    let old_account = require_i64(transaction, "account_id", "transaction")?;
+    let Some(account_id) =
+        resolve_required(accounts, old_account, "transaction account", mode, warnings)?
+    else {
+        return Ok(false);
+    };
+    let Some(counter_account_id) = resolve_optional(
+        accounts,
+        value_i64(transaction, "counter_account_id"),
+        "transaction counter account",
+        mode,
+        warnings,
+    )?
+    else {
+        return Ok(false);
+    };
+    let Some(category_id) = resolve_optional(
+        categories,
+        value_i64(transaction, "category_id"),
+        "transaction category",
+        mode,
+        warnings,
+    )?
+    else {
+        return Ok(false);
+    };
+    let Some(recurring_id) = resolve_optional(
+        recurring_rules,
+        value_i64(transaction, "recurring_id"),
+        "transaction recurring rule",
+        mode,
+        warnings,
+    )?
+    else {
+        return Ok(false);
+    };
+
+    if mode == ImportMode::Overwrite {
+        tx.execute(
+            "INSERT INTO transactions(id, occurred_on, type, amount, account_id,
+                                      counter_account_id, category_id, description,
+                                      recurring_id, created_at, updated_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                value_i64(transaction, "id"),
+                value_str(transaction, "occurred_on").unwrap_or(""),
+                value_str(transaction, "type").unwrap_or("expense"),
+                value_i64(transaction, "amount").unwrap_or(0),
+                account_id,
+                counter_account_id,
+                category_id,
+                value_str(transaction, "description").unwrap_or(""),
+                recurring_id,
+                value_str(transaction, "created_at").unwrap_or("1970-01-01T00:00:00Z"),
+                value_str(transaction, "updated_at").unwrap_or("1970-01-01T00:00:00Z"),
+            ],
+        )?;
+    } else {
+        tx.execute(
+            "INSERT INTO transactions(occurred_on, type, amount, account_id,
+                                      counter_account_id, category_id, description,
+                                      recurring_id, created_at, updated_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                value_str(transaction, "occurred_on").unwrap_or(""),
+                value_str(transaction, "type").unwrap_or("expense"),
+                value_i64(transaction, "amount").unwrap_or(0),
+                account_id,
+                counter_account_id,
+                category_id,
+                value_str(transaction, "description").unwrap_or(""),
+                recurring_id,
+                value_str(transaction, "created_at").unwrap_or("1970-01-01T00:00:00Z"),
+                value_str(transaction, "updated_at").unwrap_or("1970-01-01T00:00:00Z"),
+            ],
+        )?;
+    }
+    Ok(true)
+}
+
+fn insert_budget(
+    tx: &rusqlite::Transaction<'_>,
+    budget: &serde_json::Value,
+    mode: ImportMode,
+    categories: &HashMap<i64, i64>,
+    warnings: &mut Vec<String>,
+) -> AppResult<bool> {
+    let old_category = require_i64(budget, "category_id", "budget")?;
+    let Some(category_id) =
+        resolve_required(categories, old_category, "budget category", mode, warnings)?
+    else {
+        return Ok(false);
+    };
+    let result = if mode == ImportMode::Overwrite {
+        tx.execute(
+            "INSERT INTO budgets(id, category_id, period, amount, starts_on, ends_on, alert_threshold)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                value_i64(budget, "id"),
+                category_id,
+                value_str(budget, "period").unwrap_or("monthly"),
+                value_i64(budget, "amount").unwrap_or(0),
+                value_str(budget, "starts_on").unwrap_or("1970-01-01"),
+                value_str(budget, "ends_on"),
+                value_i64(budget, "alert_threshold").unwrap_or(80),
+            ],
+        )
+    } else {
+        tx.execute(
+            "INSERT INTO budgets(category_id, period, amount, starts_on, ends_on, alert_threshold)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                category_id,
+                value_str(budget, "period").unwrap_or("monthly"),
+                value_i64(budget, "amount").unwrap_or(0),
+                value_str(budget, "starts_on").unwrap_or("1970-01-01"),
+                value_str(budget, "ends_on"),
+                value_i64(budget, "alert_threshold").unwrap_or(80),
+            ],
+        )
+    };
+
     match result {
         Ok(_) => Ok(true),
         Err(rusqlite::Error::SqliteFailure(err, _))
-            if err.code == rusqlite::ErrorCode::ConstraintViolation =>
+            if mode == ImportMode::Append
+                && err.code == rusqlite::ErrorCode::ConstraintViolation =>
         {
-            warnings.push(format!("skipped duplicate category: {name}"));
+            warnings.push(format!(
+                "skipped duplicate budget for category {category_id}"
+            ));
             Ok(false)
         }
         Err(e) => Err(AppError::Db(e)),
@@ -174,17 +615,18 @@ pub fn import_snapshot_json(
             snap.schema_version
         )));
     }
-    if mode != "overwrite" && mode != "append" {
-        return Err(AppError::InvalidArgument(format!("unknown mode '{mode}'")));
-    }
+    let mode = ImportMode::parse(mode)?;
 
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let mut warnings = Vec::new();
     let mut category_count = 0u32;
     let mut account_count = 0u32;
     let mut transaction_count = 0u32;
+    let mut account_map = HashMap::new();
+    let mut category_map = HashMap::new();
+    let mut recurring_map = HashMap::new();
 
-    if mode == "overwrite" {
+    if mode == ImportMode::Overwrite {
         for sql in [
             "DELETE FROM transactions",
             "DELETE FROM budgets",
@@ -196,262 +638,66 @@ pub fn import_snapshot_json(
         }
         tx.execute(
             "DELETE FROM sqlite_sequence
-              WHERE name IN ('categories','accounts','transactions')",
+              WHERE name IN ('categories','accounts','recurring_rules','transactions','budgets')",
             [],
         )?;
     }
 
-    for category in &snap.categories {
-        let name = category.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        let result = if mode == "overwrite" {
-            tx.execute(
-                "INSERT INTO categories(id, name, type, color, icon, display_order, archived_at)
-                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![
-                    category.get("id").and_then(|v| v.as_i64()),
-                    name,
-                    category
-                        .get("type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("expense"),
-                    category.get("color").and_then(|v| v.as_str()),
-                    category.get("icon").and_then(|v| v.as_str()),
-                    category
-                        .get("display_order")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0),
-                    category.get("archived_at").and_then(|v| v.as_str()),
-                ],
-            )
-        } else {
-            tx.execute(
-                "INSERT INTO categories(name, type, color, icon, display_order, archived_at)
-                 VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    name,
-                    category
-                        .get("type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("expense"),
-                    category.get("color").and_then(|v| v.as_str()),
-                    category.get("icon").and_then(|v| v.as_str()),
-                    category
-                        .get("display_order")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0),
-                    category.get("archived_at").and_then(|v| v.as_str()),
-                ],
-            )
-        };
-        if handle_category_error(result, &mut warnings, name)? {
-            category_count += 1;
-        }
-    }
-
     for account in &snap.accounts {
-        let result = if mode == "overwrite" {
-            tx.execute(
-                "INSERT INTO accounts(id, name, kind, currency, initial_balance, display_order,
-                                      note, archived_at, created_at, updated_at)
-                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                params![
-                    account.get("id").and_then(|v| v.as_i64()),
-                    account.get("name").and_then(|v| v.as_str()).unwrap_or(""),
-                    account
-                        .get("kind")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("cash"),
-                    account
-                        .get("currency")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("JPY"),
-                    account
-                        .get("initial_balance")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0),
-                    account
-                        .get("display_order")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0),
-                    account.get("note").and_then(|v| v.as_str()).unwrap_or(""),
-                    account.get("archived_at").and_then(|v| v.as_str()),
-                    account
-                        .get("created_at")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("1970-01-01T00:00:00Z"),
-                    account
-                        .get("updated_at")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("1970-01-01T00:00:00Z"),
-                ],
-            )
-        } else {
-            tx.execute(
-                "INSERT INTO accounts(name, kind, currency, initial_balance, display_order,
-                                      note, archived_at, created_at, updated_at)
-                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![
-                    account.get("name").and_then(|v| v.as_str()).unwrap_or(""),
-                    account
-                        .get("kind")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("cash"),
-                    account
-                        .get("currency")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("JPY"),
-                    account
-                        .get("initial_balance")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0),
-                    account
-                        .get("display_order")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0),
-                    account.get("note").and_then(|v| v.as_str()).unwrap_or(""),
-                    account.get("archived_at").and_then(|v| v.as_str()),
-                    account
-                        .get("created_at")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("1970-01-01T00:00:00Z"),
-                    account
-                        .get("updated_at")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("1970-01-01T00:00:00Z"),
-                ],
-            )
-        };
-        result.map_err(AppError::Db)?;
+        let old_id = require_i64(account, "id", "account")?;
+        let new_id = insert_account(&tx, account, mode)?;
+        account_map.insert(old_id, new_id);
         account_count += 1;
     }
 
-    for transaction in &snap.transactions {
-        let account_id = transaction
-            .get("account_id")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
-        let counter_account_id = transaction
-            .get("counter_account_id")
-            .and_then(|v| v.as_i64());
-        let category_id = transaction.get("category_id").and_then(|v| v.as_i64());
-
-        if mode == "append" {
-            if !exists(&tx, "accounts", account_id)? {
-                warnings.push(format!(
-                    "skipped transaction referencing missing account {account_id}"
-                ));
-                continue;
-            }
-            if let Some(id) = counter_account_id {
-                if !exists(&tx, "accounts", id)? {
-                    warnings.push(format!(
-                        "skipped transaction referencing missing counter account {id}"
-                    ));
-                    continue;
-                }
-            }
-            if let Some(id) = category_id {
-                if !exists(&tx, "categories", id)? {
-                    warnings.push(format!(
-                        "skipped transaction referencing missing category {id}"
-                    ));
-                    continue;
-                }
+    for category in &snap.categories {
+        let old_id = require_i64(category, "id", "category")?;
+        if let Some((new_id, inserted)) = insert_category(&tx, category, mode, &mut warnings)? {
+            category_map.insert(old_id, new_id);
+            if inserted {
+                category_count += 1;
             }
         }
-
-        let result = if mode == "overwrite" {
-            tx.execute(
-                "INSERT INTO transactions(id, occurred_on, type, amount, account_id,
-                                          counter_account_id, category_id, description,
-                                          recurring_id, created_at, updated_at)
-                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-                params![
-                    transaction.get("id").and_then(|v| v.as_i64()),
-                    transaction
-                        .get("occurred_on")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(""),
-                    transaction
-                        .get("type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("expense"),
-                    transaction
-                        .get("amount")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0),
-                    account_id,
-                    counter_account_id,
-                    category_id,
-                    transaction
-                        .get("description")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(""),
-                    transaction.get("recurring_id").and_then(|v| v.as_i64()),
-                    transaction
-                        .get("created_at")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("1970-01-01T00:00:00Z"),
-                    transaction
-                        .get("updated_at")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("1970-01-01T00:00:00Z"),
-                ],
-            )
-        } else {
-            tx.execute(
-                "INSERT INTO transactions(occurred_on, type, amount, account_id,
-                                          counter_account_id, category_id, description,
-                                          recurring_id, created_at, updated_at)
-                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                params![
-                    transaction
-                        .get("occurred_on")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(""),
-                    transaction
-                        .get("type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("expense"),
-                    transaction
-                        .get("amount")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0),
-                    account_id,
-                    counter_account_id,
-                    category_id,
-                    transaction
-                        .get("description")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(""),
-                    transaction.get("recurring_id").and_then(|v| v.as_i64()),
-                    transaction
-                        .get("created_at")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("1970-01-01T00:00:00Z"),
-                    transaction
-                        .get("updated_at")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("1970-01-01T00:00:00Z"),
-                ],
-            )
-        };
-        result.map_err(AppError::Db)?;
-        transaction_count += 1;
     }
 
-    if mode == "overwrite" {
+    for rule in &snap.recurring_rules {
+        let old_id = require_i64(rule, "id", "recurring rule")?;
+        if let Some(new_id) =
+            insert_recurring_rule(&tx, rule, mode, &account_map, &category_map, &mut warnings)?
+        {
+            recurring_map.insert(old_id, new_id);
+        }
+    }
+
+    for transaction in &snap.transactions {
+        if insert_transaction(
+            &tx,
+            transaction,
+            mode,
+            &account_map,
+            &category_map,
+            &recurring_map,
+            &mut warnings,
+        )? {
+            transaction_count += 1;
+        }
+    }
+
+    for budget in &snap.budgets {
+        let _inserted = insert_budget(&tx, budget, mode, &category_map, &mut warnings)?;
+    }
+
+    if mode == ImportMode::Overwrite {
         for meta in &snap.app_meta {
-            let key = meta.get("key").and_then(|v| v.as_str()).unwrap_or("");
+            let key = value_str(meta, "key").unwrap_or("");
             if key.is_empty() || key == "schema_version" {
                 continue;
             }
-            let value = meta.get("value").and_then(|v| v.as_str()).unwrap_or("");
+            let value = value_str(meta, "value").unwrap_or("");
             meta_repo::set(&tx, key, value)?;
         }
     }
 
-    meta_repo::set(&tx, "last_backup_at", &chrono::Utc::now().to_rfc3339())?;
     tx.commit()?;
 
     Ok(ImportResult {

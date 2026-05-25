@@ -4,18 +4,18 @@ use budget_tracker_lib::domain::category::CategoryType;
 use budget_tracker_lib::domain::ledger::TxType;
 use budget_tracker_lib::infra::migrations;
 use budget_tracker_lib::infra::repo::{account_repo, category_repo, transaction_repo};
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 
 const NOW: &str = "2026-05-25T00:00:00+00:00";
 
-fn seeded_db() -> Connection {
+fn db_with_names(account_name: &str, category_name: &str, description: &str) -> Connection {
     let mut conn = Connection::open_in_memory().unwrap();
     migrations::run(&mut conn).unwrap();
 
     let account_id = account_repo::insert(
         &conn,
         &account_repo::InsertInput {
-            name: "現金",
+            name: account_name,
             kind: AccountKind::Cash,
             currency: "JPY",
             initial_balance: 1_000,
@@ -28,7 +28,7 @@ fn seeded_db() -> Connection {
     let category_id = category_repo::insert(
         &conn,
         &category_repo::InsertInput {
-            name: "食費",
+            name: category_name,
             type_: CategoryType::Expense,
             color: Some("#FF0000"),
             icon: None,
@@ -44,7 +44,7 @@ fn seeded_db() -> Connection {
             amount: 500,
             account_id,
             category_id,
-            description: "ランチ",
+            description,
             now: NOW,
         },
     )
@@ -53,14 +53,56 @@ fn seeded_db() -> Connection {
     conn
 }
 
+fn seeded_db() -> Connection {
+    let conn = db_with_names("現金", "食費", "ランチ");
+    let account_id: i64 = conn
+        .query_row("SELECT id FROM accounts WHERE name = '現金'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let category_id: i64 = conn
+        .query_row(
+            "SELECT id FROM categories WHERE name = '食費'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    conn.execute(
+        "INSERT INTO recurring_rules(name, type, amount, account_id, counter_account_id,
+                                     category_id, description, frequency, day_of_month,
+                                     starts_on, active)
+         VALUES('家賃', 'expense', 80000, ?1, NULL, ?2, '', 'monthly', 25, '2026-05-01', 1)",
+        params![account_id, category_id],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO budgets(category_id, period, amount, starts_on, alert_threshold)
+         VALUES(?1, 'monthly', 50000, '2026-05-01', 80)",
+        params![category_id],
+    )
+    .unwrap();
+    conn
+}
+
+fn count(conn: &Connection, table: &str) -> i64 {
+    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+        row.get(0)
+    })
+    .unwrap()
+}
+
 #[test]
 fn export_then_overwrite_import_restores_state() {
     let mut conn = seeded_db();
     let snapshot = backup::export_snapshot_json(&conn).unwrap();
     assert!(snapshot.contains("食費"));
     assert!(snapshot.contains("ランチ"));
+    assert!(snapshot.contains("recurring_rules"));
+    assert!(snapshot.contains("budgets"));
 
     conn.execute("DELETE FROM transactions", []).unwrap();
+    conn.execute("DELETE FROM budgets", []).unwrap();
+    conn.execute("DELETE FROM recurring_rules", []).unwrap();
     conn.execute("DELETE FROM categories", []).unwrap();
     conn.execute("DELETE FROM accounts", []).unwrap();
 
@@ -79,6 +121,34 @@ fn export_then_overwrite_import_restores_state() {
     assert_eq!(accounts.len(), 1);
     assert_eq!(total, 1);
     assert_eq!(transactions[0].description, "ランチ");
+    assert_eq!(count(&conn, "recurring_rules"), 1);
+    assert_eq!(count(&conn, "budgets"), 1);
+}
+
+#[test]
+fn append_import_remaps_new_account_and_category_ids() {
+    let mut target = seeded_db();
+    let source = db_with_names("銀行", "交通", "電車");
+    let snapshot = backup::export_snapshot_json(&source).unwrap();
+
+    let result = backup::import_snapshot_json(&mut target, &snapshot, "append").unwrap();
+    assert_eq!(result.accounts, 1);
+    assert_eq!(result.categories, 1);
+    assert_eq!(result.transactions, 1);
+
+    let (account_name, category_name): (String, String) = target
+        .query_row(
+            "SELECT a.name, c.name
+               FROM transactions t
+               JOIN accounts a ON a.id = t.account_id
+               JOIN categories c ON c.id = t.category_id
+              WHERE t.description = '電車'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(account_name, "銀行");
+    assert_eq!(category_name, "交通");
 }
 
 #[test]
@@ -89,6 +159,7 @@ fn append_import_skips_rows_with_missing_fk() {
       "exported_at": "2026-05-25T00:00:00Z",
       "categories": [],
       "accounts": [],
+      "recurring_rules": [],
       "transactions": [
         {
           "occurred_on": "2026-05-01",
@@ -103,6 +174,7 @@ fn append_import_skips_rows_with_missing_fk() {
           "updated_at": "2026-05-01T00:00:00Z"
         }
       ],
+      "budgets": [],
       "app_meta": []
     }"##;
 
@@ -119,7 +191,9 @@ fn import_rejects_wrong_schema_version() {
       "exported_at": "2026-05-25T00:00:00Z",
       "categories": [],
       "accounts": [],
+      "recurring_rules": [],
       "transactions": [],
+      "budgets": [],
       "app_meta": []
     }"#;
 
