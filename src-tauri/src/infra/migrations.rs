@@ -167,6 +167,24 @@ mod tests {
     }
 
     #[test]
+    fn applies_v003_budget_lookup_indexes() {
+        let mut conn = fresh();
+        let version = run(&mut conn).unwrap();
+        assert!(version >= 3, "expected V003 applied, got {version}");
+        for index_name in ["idx_budgets_category_starts", "idx_tx_budget_month_category"] {
+            let exists: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master
+                      WHERE type='index' AND name=?1",
+                    [index_name],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(exists, 1, "{index_name} index must exist after V003");
+        }
+    }
+
+    #[test]
     fn enforces_transfer_check_constraint() {
         let mut conn = fresh();
         run(&mut conn).unwrap();

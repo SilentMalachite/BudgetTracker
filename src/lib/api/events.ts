@@ -1,6 +1,6 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
-export type ChangedDomain = 'categories' | 'accounts' | 'transactions' | 'meta';
+export type ChangedDomain = 'categories' | 'accounts' | 'transactions' | 'budgets' | 'meta';
 
 export type DataChangedPayload = {
   domain: ChangedDomain;

@@ -8,6 +8,7 @@ pub enum ChangedDomain {
     Categories,
     Accounts,
     Transactions,
+    Budgets,
     Meta,
 }
 

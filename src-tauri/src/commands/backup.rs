@@ -188,6 +188,7 @@ pub struct ImportResult {
     pub categories: u32,
     pub accounts: u32,
     pub transactions: u32,
+    pub budgets: u32,
     pub warnings: Vec<String>,
 }
 
@@ -622,6 +623,7 @@ pub fn import_snapshot_json(
     let mut category_count = 0u32;
     let mut account_count = 0u32;
     let mut transaction_count = 0u32;
+    let mut budget_count = 0u32;
     let mut account_map = HashMap::new();
     let mut category_map = HashMap::new();
     let mut recurring_map = HashMap::new();
@@ -684,7 +686,9 @@ pub fn import_snapshot_json(
     }
 
     for budget in &snap.budgets {
-        let _inserted = insert_budget(&tx, budget, mode, &category_map, &mut warnings)?;
+        if insert_budget(&tx, budget, mode, &category_map, &mut warnings)? {
+            budget_count += 1;
+        }
     }
 
     if mode == ImportMode::Overwrite {
@@ -704,6 +708,7 @@ pub fn import_snapshot_json(
         categories: category_count,
         accounts: account_count,
         transactions: transaction_count,
+        budgets: budget_count,
         warnings,
     })
 }
@@ -724,6 +729,7 @@ pub fn import_json(
     emit_changed(&app, ChangedDomain::Categories);
     emit_changed(&app, ChangedDomain::Accounts);
     emit_changed(&app, ChangedDomain::Transactions);
+    emit_changed(&app, ChangedDomain::Budgets);
     emit_changed(&app, ChangedDomain::Meta);
 
     Ok(result)

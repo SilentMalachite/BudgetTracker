@@ -75,7 +75,7 @@
       const result = await importJson(await file.text(), mode);
       importStats = result;
       warnings = result.warnings;
-      message = `読み込み完了: カテゴリ ${result.categories} / 口座 ${result.accounts} / 取引 ${result.transactions}`;
+      message = `読み込み完了: カテゴリ ${result.categories} / 口座 ${result.accounts} / 取引 ${result.transactions} / 予算 ${result.budgets}`;
       lastBackup = await getLastBackupAt();
     } catch (e) {
       message = `インポート失敗: ${e instanceof Error ? e.message : String(e)}`;
@@ -137,7 +137,7 @@
       {#if importStats}
         <p class="stats">
           カテゴリ {importStats.categories} / 口座 {importStats.accounts} / 取引
-          {importStats.transactions}
+          {importStats.transactions} / 予算 {importStats.budgets}
         </p>
       {/if}
       {#if warnings.length > 0}

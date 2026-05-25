@@ -8,9 +8,9 @@ macOS / Windows 両対応の家計簿デスクトップアプリ。Tauri + Svelt
 
 ## 現在の状態
 
-- Phase 1 完了 (スキャフォールド + SQLCipher/Keychain 基盤)
+- Phase 4 完了 (月別カテゴリ予算 + 予算進捗 UI + Dashboard 予算ウィジェット)
 - 既存の `家計簿.html` は参考用のプロトタイプ。**移植せず新規実装する**
-- 次は spec の Phase 2 (取引 CRUD + カテゴリ + ダッシュボード)
+- 次は spec の Phase 5 (定期取引 + 分析レポート強化)
 
 ## 技術スタック
 

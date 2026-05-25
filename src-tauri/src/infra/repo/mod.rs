@@ -7,6 +7,7 @@
 
 pub mod account_repo;
 pub mod balance_repo;
+pub mod budget_repo;
 pub mod category_repo;
 pub mod meta_repo;
 pub mod report_repo;

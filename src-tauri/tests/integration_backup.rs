@@ -111,6 +111,7 @@ fn export_then_overwrite_import_restores_state() {
     assert_eq!(result.categories, 1);
     assert_eq!(result.accounts, 1);
     assert_eq!(result.transactions, 1);
+    assert_eq!(result.budgets, 1);
 
     let categories = category_repo::list(&conn, &category_repo::ListFilter::default()).unwrap();
     let accounts = account_repo::list(&conn, false).unwrap();
@@ -123,6 +124,10 @@ fn export_then_overwrite_import_restores_state() {
     assert_eq!(transactions[0].description, "ランチ");
     assert_eq!(count(&conn, "recurring_rules"), 1);
     assert_eq!(count(&conn, "budgets"), 1);
+    let budget_amount: i64 = conn
+        .query_row("SELECT amount FROM budgets", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(budget_amount, 50_000);
 }
 
 #[test]
@@ -149,6 +154,42 @@ fn append_import_remaps_new_account_and_category_ids() {
         .unwrap();
     assert_eq!(account_name, "銀行");
     assert_eq!(category_name, "交通");
+}
+
+#[test]
+fn append_import_reports_inserted_budget_count() {
+    let mut target = seeded_db();
+    let source = db_with_names("カード", "日用品", "洗剤");
+    let category_id: i64 = source
+        .query_row(
+            "SELECT id FROM categories WHERE name = '日用品'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    source
+        .execute(
+            "INSERT INTO budgets(category_id, period, amount, starts_on, alert_threshold)
+             VALUES(?1, 'monthly', 25000, '2026-05-01', 75)",
+            params![category_id],
+        )
+        .unwrap();
+    let snapshot = backup::export_snapshot_json(&source).unwrap();
+
+    let result = backup::import_snapshot_json(&mut target, &snapshot, "append").unwrap();
+
+    assert_eq!(result.budgets, 1);
+    let amount: i64 = target
+        .query_row(
+            "SELECT b.amount
+               FROM budgets b
+               JOIN categories c ON c.id = b.category_id
+              WHERE c.name = '日用品'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(amount, 25_000);
 }
 
 #[test]

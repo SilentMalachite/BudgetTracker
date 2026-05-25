@@ -61,6 +61,8 @@ pub fn run() {
             commands::transactions::update_transfer,
             commands::reports::monthly_summary,
             commands::reports::monthly_series,
+            commands::budgets::list_budget_statuses,
+            commands::budgets::set_budget,
             commands::backup::export_json,
             commands::backup::import_json,
             commands::settings::get_last_backup_at,

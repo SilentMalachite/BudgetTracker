@@ -6,3 +6,4 @@ pub mod reports;
 pub mod backup;
 pub mod settings;
 pub mod balances;
+pub mod budgets;

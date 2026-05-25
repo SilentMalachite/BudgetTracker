@@ -12,6 +12,7 @@
   import type { UnlistenFn } from '@tauri-apps/api/event';
   import Card from '../lib/components/Card.svelte';
   import EmptyState from '../lib/components/EmptyState.svelte';
+  import { listBudgetStatuses, type BudgetStatus } from '../lib/api/budgets';
   import { onDataChanged } from '../lib/api/events';
   import { monthlySeries, monthlySummary, type MonthlyBucket, type MonthlySummary } from '../lib/api/reports';
   import { listTransactions, type Transaction } from '../lib/api/transactions';
@@ -24,12 +25,14 @@
   const today = new Date();
   const currentYear = today.getFullYear();
   const currentMonth = today.getMonth() + 1;
+  const currentYearMonth = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
   const catStore = createCategoriesStore({ include_archived: true });
   const balancesStore = createBalancesStore();
 
   let summary = $state<MonthlySummary | null>(null);
   let series = $state<MonthlyBucket[]>([]);
   let recent = $state<Transaction[]>([]);
+  let budgetStatuses = $state<BudgetStatus[]>([]);
   let error = $state<string | null>(null);
   let canvas = $state<HTMLCanvasElement | null>(null);
   let chart: Chart<'bar'> | null = null;
@@ -40,19 +43,22 @@
   async function reload() {
     error = null;
     try {
-      const [nextSummary, nextSeries, nextRecent] = await Promise.all([
+      const [nextSummary, nextSeries, nextRecent, nextBudgets] = await Promise.all([
         monthlySummary(currentYear, currentMonth),
         monthlySeries(12),
         listTransactions({}, 0, 10),
+        listBudgetStatuses(currentYearMonth),
       ]);
       summary = nextSummary;
       series = nextSeries;
       recent = nextRecent.items;
+      budgetStatuses = nextBudgets;
       drawChart();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       series = [];
       recent = [];
+      budgetStatuses = [];
       drawChart();
     }
   }
@@ -93,7 +99,12 @@
       await reload();
       try {
         unlisten = await onDataChanged((domain) => {
-          if (domain === 'transactions' || domain === 'categories' || domain === 'accounts') {
+          if (
+            domain === 'transactions' ||
+            domain === 'categories' ||
+            domain === 'accounts' ||
+            domain === 'budgets'
+          ) {
             void reload();
           }
         });
@@ -111,6 +122,19 @@
     void catStore.dispose();
     void balancesStore.dispose();
   });
+
+  const topBudgetStatuses = $derived(
+    [...budgetStatuses]
+      .filter((status) => status.budget_id != null)
+      .sort((a: BudgetStatus, b: BudgetStatus) => {
+        const percentOrder = b.percent - a.percent;
+        if (percentOrder !== 0) return percentOrder;
+        const projectedOrder = Number(b.projected_over_budget) - Number(a.projected_over_budget);
+        if (projectedOrder !== 0) return projectedOrder;
+        return a.category_name.localeCompare(b.category_name, 'ja');
+      })
+      .slice(0, 3),
+  );
 </script>
 
 <section data-testid="page-dashboard">
@@ -227,6 +251,34 @@
         {/if}
       {/snippet}
     </Card>
+
+    <Card>
+      {#snippet children()}
+        <h2>予算進捗</h2>
+        {#if topBudgetStatuses.length === 0}
+          <EmptyState title="予算が未設定です" hint="予算ページで月別予算を設定してください" />
+        {:else}
+          <ul class="budget-widget" data-testid="dashboard-budget-widget">
+            {#each topBudgetStatuses as status (status.category_id)}
+              <li data-testid={`dashboard-budget-row-${status.category_id}`}>
+                <div class="budget-widget-head">
+                  <strong>{status.category_name}</strong>
+                  <span>{status.percent}%</span>
+                </div>
+                <div class="budget-widget-bar">
+                  <span style={`width: ${status.progress_percent}%`}></span>
+                </div>
+                <small>
+                  {yen.format(status.spent)} / {yen.format(status.budgeted)}
+                  {#if status.threshold_reached}<em>警告</em>{/if}
+                  {#if status.projected_over_budget}<em>予測超過</em>{/if}
+                </small>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      {/snippet}
+    </Card>
   </div>
 </section>
 
@@ -300,6 +352,64 @@
 
   .recent-list li:last-child {
     border-bottom: 0;
+  }
+
+  .budget-widget {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .budget-widget li {
+    display: grid;
+    gap: var(--space-2);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: var(--space-3);
+  }
+
+  .budget-widget li:last-child {
+    border-bottom: 0;
+    padding-bottom: 0;
+  }
+
+  .budget-widget-head {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
+    align-items: baseline;
+  }
+
+  .budget-widget-head strong {
+    margin: 0;
+    font-size: 1rem;
+  }
+
+  .budget-widget-head span {
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .budget-widget-bar {
+    height: 10px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: rgba(0, 0, 0, 0.08);
+  }
+
+  .budget-widget-bar span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(135deg, var(--accent-grad-start), var(--accent-grad-end));
+  }
+
+  .budget-widget em {
+    margin-left: var(--space-2);
+    color: var(--danger);
+    font-style: normal;
+    font-weight: 700;
   }
 
   .date,

@@ -4,6 +4,7 @@
   import Dashboard from './routes/Dashboard.svelte';
   import Transactions from './routes/Transactions.svelte';
   import Categories from './routes/Categories.svelte';
+  import Budgets from './routes/Budgets.svelte';
   import Accounts from './routes/Accounts.svelte';
   import Settings from './routes/Settings.svelte';
 
@@ -11,6 +12,7 @@
     '/',
     '/transactions',
     '/categories',
+    '/budgets',
     '/accounts',
     '/settings',
   ]);
@@ -46,6 +48,8 @@
       <Transactions />
     {:else if currentPath === '/categories'}
       <Categories />
+    {:else if currentPath === '/budgets'}
+      <Budgets />
     {:else if currentPath === '/accounts'}
       <Accounts />
     {:else if currentPath === '/settings'}

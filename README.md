@@ -2,7 +2,7 @@
 
 macOS / Windows 両対応の家計簿デスクトップアプリ。Tauri + Svelte 5 + Rust + SQLite (SQLCipher) で構築。
 
-> ⚠️ **開発中** — 現在 **Phase 1** (スキャフォールド + SQLCipher/Keychain 基盤) 完了。取引 CRUD・予算・レポート機能は Phase 2 以降で実装。
+> ⚠️ **開発中** — 現在 **Phase 4** (月別カテゴリ予算 + 予算進捗 UI) 完了。次は Phase 5 の定期取引と分析レポート強化。
 
 ## 特長(設計目標)
 
@@ -21,7 +21,7 @@ macOS / Windows 両対応の家計簿デスクトップアプリ。Tauri + Svelt
 | フロントエンド | Svelte 5 (Runes) + TypeScript + Vite |
 | バックエンド | Rust + rusqlite (`bundled-sqlcipher-vendored-openssl`) |
 | 鍵管理 | `keyring` crate |
-| グラフ | Chart.js (Phase 2 以降) |
+| グラフ | Chart.js |
 | テスト | `cargo test` / `proptest` / Vitest / Playwright |
 
 ## 必要環境
@@ -93,10 +93,10 @@ src-tauri/src/
 ## ロードマップ
 
 - [x] **Phase 1** — Tauri スキャフォールド / SQLCipher / Keychain / CI (macOS + Windows)
-- [ ] **Phase 2** — 取引 CRUD + カテゴリ + ダッシュボード
-- [ ] **Phase 3** — 複数口座 + 振替 + 残高計算
-- [ ] **Phase 4** — 予算 + 定期取引 + アラート(UI バッジ)
-- [ ] **Phase 5** — レポート + Excel/JSON エクスポート + バックアップ
+- [x] **Phase 2** — 取引 CRUD + カテゴリ + ダッシュボード
+- [x] **Phase 3** — 複数口座 + 振替 + 残高計算
+- [x] **Phase 4** — 予算管理 (月別カテゴリ予算 + 進捗/警告バッジ)
+- [ ] **Phase 5** — 定期取引 + 分析レポート強化
 
 ## CI
 

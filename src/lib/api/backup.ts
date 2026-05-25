@@ -6,6 +6,7 @@ export type ImportResult = {
   categories: number;
   accounts: number;
   transactions: number;
+  budgets: number;
   warnings: string[];
 };
 
