@@ -147,6 +147,67 @@ pub fn aggregate_monthly(txs: &[Transaction], year: i32, month: u32) -> MonthlyS
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ValidatedTransferInput {
+    pub occurred_on: String,
+    pub amount: i64,
+    pub account_id: i64,
+    pub counter_account_id: i64,
+    pub description: String,
+}
+
+pub struct RawTransferInput<'a> {
+    pub occurred_on: &'a str,
+    pub amount: i64,
+    pub account_id: i64,
+    pub counter_account_id: i64,
+    pub description: &'a str,
+}
+
+/// Validate a transfer transaction input.
+///
+/// Invariants enforced here (the V001 CHECK enforces shape; the validator
+/// enforces things SQL cannot, like source != destination):
+/// - `occurred_on` is `YYYY-MM-DD`.
+/// - `amount > 0`.
+/// - `account_id != counter_account_id` (the CHECK constraint does not catch this).
+/// - `description.chars().count() <= MAX_DESCRIPTION_LEN`.
+pub fn validate_transfer_input(raw: &RawTransferInput<'_>) -> AppResult<ValidatedTransferInput> {
+    chrono::NaiveDate::parse_from_str(raw.occurred_on, "%Y-%m-%d").map_err(|_| {
+        AppError::InvalidArgument(format!(
+            "occurred_on must be YYYY-MM-DD, got '{}'",
+            raw.occurred_on
+        ))
+    })?;
+
+    if raw.amount <= 0 {
+        return Err(AppError::InvalidArgument(format!(
+            "amount must be positive, got {}",
+            raw.amount
+        )));
+    }
+
+    if raw.account_id == raw.counter_account_id {
+        return Err(AppError::InvalidArgument(
+            "transfer source and destination must differ".into(),
+        ));
+    }
+
+    if raw.description.chars().count() > MAX_DESCRIPTION_LEN {
+        return Err(AppError::InvalidArgument(format!(
+            "description must be {MAX_DESCRIPTION_LEN} chars or fewer"
+        )));
+    }
+
+    Ok(ValidatedTransferInput {
+        occurred_on: raw.occurred_on.to_string(),
+        amount: raw.amount,
+        account_id: raw.account_id,
+        counter_account_id: raw.counter_account_id,
+        description: raw.description.to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,6 +356,75 @@ mod tests {
         bad.occurred_on = "garbage".into();
         let s = aggregate_monthly(&[bad], 2026, 5);
         assert_eq!(s.income, 0);
+    }
+
+    fn ok_transfer() -> RawTransferInput<'static> {
+        RawTransferInput {
+            occurred_on: "2026-05-25",
+            amount: 50_000,
+            account_id: 1,
+            counter_account_id: 2,
+            description: "現金→銀行",
+        }
+    }
+
+    #[test]
+    fn transfer_accepts_minimal_valid_input() {
+        let v = validate_transfer_input(&ok_transfer()).unwrap();
+        assert_eq!(v.amount, 50_000);
+        assert_eq!(v.account_id, 1);
+        assert_eq!(v.counter_account_id, 2);
+    }
+
+    #[test]
+    fn transfer_rejects_same_source_and_destination() {
+        let mut bad = ok_transfer();
+        bad.counter_account_id = bad.account_id;
+        let err = validate_transfer_input(&bad).unwrap_err();
+        assert!(matches!(err, AppError::InvalidArgument(_)));
+        assert!(err.to_string().contains("source and destination"));
+    }
+
+    #[test]
+    fn transfer_rejects_zero_or_negative_amount() {
+        let mut zero = ok_transfer();
+        zero.amount = 0;
+        assert!(matches!(
+            validate_transfer_input(&zero).unwrap_err(),
+            AppError::InvalidArgument(_)
+        ));
+        let mut neg = ok_transfer();
+        neg.amount = -1;
+        assert!(matches!(
+            validate_transfer_input(&neg).unwrap_err(),
+            AppError::InvalidArgument(_)
+        ));
+    }
+
+    #[test]
+    fn transfer_rejects_bad_date() {
+        let mut bad = ok_transfer();
+        bad.occurred_on = "2026/05/25";
+        assert!(matches!(
+            validate_transfer_input(&bad).unwrap_err(),
+            AppError::InvalidArgument(_)
+        ));
+    }
+
+    #[test]
+    fn transfer_rejects_too_long_description() {
+        let long = "あ".repeat(201);
+        let bad = RawTransferInput {
+            occurred_on: "2026-05-25",
+            amount: 1,
+            account_id: 1,
+            counter_account_id: 2,
+            description: &long,
+        };
+        assert!(matches!(
+            validate_transfer_input(&bad).unwrap_err(),
+            AppError::InvalidArgument(_)
+        ));
     }
 }
 
