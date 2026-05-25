@@ -164,7 +164,7 @@
     <Button variant="ghost" onclick={() => (modalOpen = false)}>
       {#snippet children()}キャンセル{/snippet}
     </Button>
-    <Button onclick={submit}>
+    <Button onclick={() => void submit()}>
       {#snippet children()}{editing ? '更新' : '追加'}{/snippet}
     </Button>
   {/snippet}

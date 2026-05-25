@@ -84,8 +84,8 @@
     modalOpen = true;
   }
 
-  function parsePositiveInteger(raw: string): number | null {
-    const trimmed = raw.trim();
+  function parsePositiveInteger(raw: string | number): number | null {
+    const trimmed = String(raw).trim();
     if (!/^\d+$/.test(trimmed)) return null;
     const value = Number.parseInt(trimmed, 10);
     return value > 0 ? value : null;
@@ -288,7 +288,7 @@
     <Button variant="ghost" onclick={() => (modalOpen = false)}>
       {#snippet children()}キャンセル{/snippet}
     </Button>
-    <Button onclick={submit}>
+    <Button onclick={() => void submit()}>
       {#snippet children()}{editing ? '更新' : '追加'}{/snippet}
     </Button>
   {/snippet}
