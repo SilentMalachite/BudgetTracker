@@ -15,6 +15,7 @@
   import { onDataChanged } from '../lib/api/events';
   import { monthlySeries, monthlySummary, type MonthlyBucket, type MonthlySummary } from '../lib/api/reports';
   import { listTransactions, type Transaction } from '../lib/api/transactions';
+  import { createBalancesStore } from '../lib/stores/balances.svelte';
   import { createCategoriesStore } from '../lib/stores/categories.svelte';
 
   Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend);
@@ -24,6 +25,7 @@
   const currentYear = today.getFullYear();
   const currentMonth = today.getMonth() + 1;
   const catStore = createCategoriesStore({ include_archived: true });
+  const balancesStore = createBalancesStore();
 
   let summary = $state<MonthlySummary | null>(null);
   let series = $state<MonthlyBucket[]>([]);
@@ -107,6 +109,7 @@
     unlisten?.();
     unlisten = null;
     void catStore.dispose();
+    void balancesStore.dispose();
   });
 </script>
 
@@ -116,6 +119,39 @@
   {#if error}
     <p class="error">エラー: {error}</p>
   {/if}
+
+  <Card>
+    {#snippet children()}
+      <div class="assets-card">
+        <div class="assets-head">
+          <small>総資産</small>
+          <strong data-testid="card-total-assets">{yen.format(balancesStore.totalAssets)}</strong>
+          {#if balancesStore.error}
+            <small class="error">エラー: {balancesStore.error}</small>
+          {/if}
+        </div>
+        {#if balancesStore.items.length === 0 && !balancesStore.loading}
+          <EmptyState title="口座がありません" hint="口座ページから追加してください" />
+        {:else}
+          <ul class="assets-list" data-testid="assets-list">
+            {#each balancesStore.items.filter((b) => b.archived_at == null).slice(0, 8) as account (account.account_id)}
+              <li>
+                <span class="acct-name">{account.name}</span>
+                <span class="acct-balance" data-testid={`balance-${account.account_id}`}>
+                  {yen.format(account.balance)}
+                </span>
+              </li>
+            {/each}
+            {#if balancesStore.items.filter((b) => b.archived_at == null).length > 8}
+              <li class="more">
+                他 {balancesStore.items.filter((b) => b.archived_at == null).length - 8} 件
+              </li>
+            {/if}
+          </ul>
+        {/if}
+      </div>
+    {/snippet}
+  </Card>
 
   <div class="summary-grid">
     <Card>
@@ -303,5 +339,47 @@
     .description {
       display: none;
     }
+  }
+
+  .assets-card {
+    display: grid;
+    gap: var(--space-4);
+  }
+  .assets-head {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+  .assets-head strong {
+    font-size: 2rem;
+    margin: 0;
+  }
+  .assets-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: var(--space-2) var(--space-4);
+  }
+  .assets-list li {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    border-bottom: 1px dashed var(--border);
+    padding: var(--space-2) 0;
+  }
+  .assets-list li.more {
+    color: var(--muted);
+    justify-content: center;
+    grid-column: 1 / -1;
+  }
+  .acct-name {
+    color: var(--muted);
+  }
+  .acct-balance {
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
   }
 </style>
