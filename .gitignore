@@ -41,3 +41,6 @@ build/
 coverage/
 playwright-report/
 test-results/
+
+# Worktrees (superpowers workflow)
+.worktrees/
