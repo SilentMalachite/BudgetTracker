@@ -200,3 +200,36 @@ fn import_rejects_wrong_schema_version() {
     let err = backup::import_snapshot_json(&mut conn, payload, "overwrite").unwrap_err();
     assert!(err.to_string().contains("unsupported schema_version"));
 }
+
+#[test]
+fn overwrite_import_does_not_restore_last_backup_at() {
+    let source = seeded_db();
+    source
+        .execute(
+            "INSERT INTO app_meta(key, value) VALUES('last_backup_at', '2000-01-01T00:00:00Z')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        )
+        .unwrap();
+    let snapshot = backup::export_snapshot_json(&source).unwrap();
+
+    let mut target = seeded_db();
+    target
+        .execute(
+            "INSERT INTO app_meta(key, value) VALUES('last_backup_at', '2026-05-25T00:00:00Z')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        )
+        .unwrap();
+
+    backup::import_snapshot_json(&mut target, &snapshot, "overwrite").unwrap();
+
+    let last_backup_at: String = target
+        .query_row(
+            "SELECT value FROM app_meta WHERE key = 'last_backup_at'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(last_backup_at, "2026-05-25T00:00:00Z");
+}

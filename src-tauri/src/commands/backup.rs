@@ -690,7 +690,7 @@ pub fn import_snapshot_json(
     if mode == ImportMode::Overwrite {
         for meta in &snap.app_meta {
             let key = value_str(meta, "key").unwrap_or("");
-            if key.is_empty() || key == "schema_version" {
+            if key.is_empty() || key == "schema_version" || key == "last_backup_at" {
                 continue;
             }
             let value = value_str(meta, "value").unwrap_or("");
