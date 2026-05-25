@@ -96,7 +96,12 @@
     formAccount = String(transaction.account_id);
     formCounterAccount =
       transaction.counter_account_id != null ? String(transaction.counter_account_id) : secondAccount();
-    formCategory = transaction.category_id != null ? String(transaction.category_id) : firstCategoryFor('expense');
+    formCategory =
+      transaction.category_id != null
+        ? String(transaction.category_id)
+        : transaction.type === 'income' || transaction.type === 'expense'
+          ? firstCategoryFor(transaction.type)
+          : '';
     formDescription = transaction.description;
     formError = null;
     modalOpen = true;
@@ -111,6 +116,10 @@
 
   async function submit() {
     formError = null;
+    if (editing && editing.type !== formType) {
+      formError = '種別の変更はできません。一度削除してから再登録してください';
+      return;
+    }
     const amount = parsePositiveInteger(formAmount);
     if (amount == null) {
       formError = '金額は正の整数を入力してください';
@@ -141,10 +150,6 @@
           description: formDescription,
         };
         if (editing) {
-          if (editing.type !== 'transfer') {
-            formError = '種別の変更はできません。一度削除してから再登録してください';
-            return;
-          }
           await updateTransfer(editing.id, payload);
         } else {
           await createTransfer(payload);
@@ -164,10 +169,6 @@
           description: formDescription,
         };
         if (editing) {
-          if (editing.type === 'transfer') {
-            formError = '種別の変更はできません。一度削除してから再登録してください';
-            return;
-          }
           await updateTransaction(editing.id, payload);
         } else {
           await createTransaction(payload);
@@ -188,12 +189,29 @@
   const accountById = $derived(new Map(accStore.items.map((item) => [item.id, item])));
 
   const categoryOptions = $derived(
-    catStore.items
-      .filter((category) => (category.type === formType || formType === 'transfer') && !category.archived_at)
-      .map((category) => ({ value: String(category.id), label: category.name })),
+    formType === 'transfer'
+      ? []
+      : catStore.items
+          .filter((category) => category.type === formType && !category.archived_at)
+          .map((category) => ({ value: String(category.id), label: category.name })),
   );
 
   const visibleAccounts = $derived(accStore.items.filter((account) => !account.archived_at));
+
+  const canCreateTransfer = $derived(visibleAccounts.length >= 2);
+
+  const modalTypeOptions = $derived(
+    canCreateTransfer
+      ? [
+          { value: 'expense', label: '支出' },
+          { value: 'income', label: '収入' },
+          { value: 'transfer', label: '振替' },
+        ]
+      : [
+          { value: 'expense', label: '支出' },
+          { value: 'income', label: '収入' },
+        ],
+  );
 
   const accountOptions = $derived(
     visibleAccounts.map((account) => ({ value: String(account.id), label: account.name })),
@@ -351,13 +369,14 @@
       label="種別"
       required
       bind:value={formType}
-      options={[
-        { value: 'expense', label: '支出' },
-        { value: 'income', label: '収入' },
-        { value: 'transfer', label: '振替' },
-      ]}
+      options={modalTypeOptions}
       testid="tx-type"
     />
+    {#if !canCreateTransfer}
+      <small class="hint" data-testid="tx-transfer-disabled-hint">
+        振替には2口座以上が必要です。先に口座を追加してください。
+      </small>
+    {/if}
     <DatePicker label="日付" required bind:value={formDate} testid="tx-date" />
     <TextField label="金額 (円)" required type="number" bind:value={formAmount} testid="tx-amount" />
     {#if formType === 'transfer'}
@@ -464,5 +483,9 @@
 
   .error {
     color: var(--danger);
+  }
+
+  .hint {
+    color: var(--muted);
   }
 </style>
