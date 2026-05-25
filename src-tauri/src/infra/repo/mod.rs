@@ -8,3 +8,4 @@
 pub mod account_repo;
 pub mod category_repo;
 pub mod meta_repo;
+pub mod transaction_repo;
