@@ -15,37 +15,48 @@ pub struct AccountBalance {
     pub display_order: i64,
 }
 
+/// SQL used by [`list_balances`]. Exposed so integration tests can run
+/// `EXPLAIN QUERY PLAN` against the exact same statement.
+///
+/// Computes each account's current balance using two index-friendly
+/// subqueries combined with `UNION ALL`. The first leg uses
+/// `idx_tx_account`; the second uses `idx_tx_counter_account` (V002).
+/// Self-transfer is impossible because `validate_transfer_input` rejects
+/// `account_id == counter_account_id`.
+pub const LIST_BALANCES_SQL: &str = "\
+SELECT a.id,
+       a.name,
+       a.kind,
+       a.initial_balance,
+       a.archived_at,
+       a.display_order,
+       a.initial_balance + COALESCE((
+           SELECT SUM(delta) FROM (
+               SELECT CASE type
+                          WHEN 'income'   THEN  amount
+                          WHEN 'expense'  THEN -amount
+                          WHEN 'transfer' THEN -amount
+                      END AS delta
+                 FROM transactions
+                WHERE account_id = a.id
+               UNION ALL
+               SELECT amount AS delta
+                 FROM transactions
+                WHERE counter_account_id = a.id AND type = 'transfer'
+           )
+       ), 0) AS balance
+  FROM accounts a
+ ORDER BY a.display_order ASC, a.id ASC";
+
 /// One row per account (including archived). Caller filters as needed.
 ///
-/// SQL:
-/// - LEFT JOIN matches a transaction on either `account_id = a.id` or `counter_account_id = a.id`.
-/// - The CASE expression buckets the matched amount with the correct sign.
-/// - Self-transfer is impossible (validator rejects it; SQL would not double-count anyway because
-///   a row can match either side, not both, for a given `a.id` — V001 CHECK forbids the same id
-///   in both columns indirectly: source != destination is a validator-level invariant).
+/// Computes each account's current balance using two index-friendly
+/// subqueries combined with `UNION ALL`. The first leg uses
+/// `idx_tx_account`; the second uses `idx_tx_counter_account` (V002).
+/// Self-transfer is impossible because `validate_transfer_input` rejects
+/// `account_id == counter_account_id`.
 pub fn list_balances(conn: &Connection) -> AppResult<Vec<AccountBalance>> {
-    let mut stmt = conn.prepare(
-        "SELECT a.id,
-                a.name,
-                a.kind,
-                a.initial_balance,
-                a.archived_at,
-                a.display_order,
-                a.initial_balance + COALESCE(SUM(
-                    CASE
-                        WHEN t.account_id = a.id AND t.type = 'income'   THEN  t.amount
-                        WHEN t.account_id = a.id AND t.type = 'expense'  THEN -t.amount
-                        WHEN t.account_id = a.id AND t.type = 'transfer' THEN -t.amount
-                        WHEN t.counter_account_id = a.id AND t.type = 'transfer' THEN t.amount
-                        ELSE 0
-                    END
-                ), 0) AS balance
-           FROM accounts a
-           LEFT JOIN transactions t
-             ON t.account_id = a.id OR t.counter_account_id = a.id
-          GROUP BY a.id
-          ORDER BY a.display_order ASC, a.id ASC",
-    )?;
+    let mut stmt = conn.prepare(LIST_BALANCES_SQL)?;
     let rows = stmt
         .query_map([], |row| {
             let kind_raw: String = row.get(2)?;

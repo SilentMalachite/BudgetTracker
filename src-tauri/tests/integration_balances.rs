@@ -137,6 +137,10 @@ fn balance_repo_matches_pure_compute_balance() {
         1_000,
     )
     .unwrap();
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM transactions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(all_txs.len() as i64, count, "test must read all transactions");
     let balances_sql = balance_repo::list_balances(&conn).unwrap();
     for row in &balances_sql {
         let initial = row.initial_balance;
@@ -147,4 +151,31 @@ fn balance_repo_matches_pure_compute_balance() {
             row.balance, pure, row.account_id
         );
     }
+}
+
+#[test]
+fn list_balances_uses_both_indexes() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    migrations::run(&mut conn).unwrap();
+
+    let explain_sql = format!("EXPLAIN QUERY PLAN {}", balance_repo::LIST_BALANCES_SQL);
+    let mut stmt = conn.prepare(&explain_sql).unwrap();
+    // EXPLAIN QUERY PLAN columns: id, parent, notused, detail
+    let details: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+
+    let joined = details.join("\n");
+    assert!(
+        details
+            .iter()
+            .any(|d| d.contains("idx_tx_account") && !d.contains("idx_tx_counter_account")),
+        "expected at least one plan row to use idx_tx_account; got:\n{joined}"
+    );
+    assert!(
+        details.iter().any(|d| d.contains("idx_tx_counter_account")),
+        "expected at least one plan row to use idx_tx_counter_account; got:\n{joined}"
+    );
 }
