@@ -191,3 +191,62 @@ pub fn delete(conn: &Connection, id: i64) -> AppResult<()> {
     }
     Ok(())
 }
+
+pub struct InsertTransferInput<'a> {
+    pub occurred_on: &'a str,
+    pub amount: i64,
+    pub account_id: i64,
+    pub counter_account_id: i64,
+    pub description: &'a str,
+    pub now: &'a str,
+}
+
+pub fn insert_transfer(conn: &Connection, input: &InsertTransferInput<'_>) -> AppResult<i64> {
+    conn.execute(
+        "INSERT INTO transactions(occurred_on, type, amount, account_id,
+                                  counter_account_id, category_id,
+                                  description, created_at, updated_at)
+         VALUES (?1, 'transfer', ?2, ?3, ?4, NULL, ?5, ?6, ?6)",
+        params![
+            input.occurred_on,
+            input.amount,
+            input.account_id,
+            input.counter_account_id,
+            input.description,
+            input.now,
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub struct UpdateTransferInput<'a> {
+    pub occurred_on: &'a str,
+    pub amount: i64,
+    pub account_id: i64,
+    pub counter_account_id: i64,
+    pub description: &'a str,
+    pub now: &'a str,
+}
+
+pub fn update_transfer(conn: &Connection, id: i64, input: &UpdateTransferInput<'_>) -> AppResult<()> {
+    let n = conn.execute(
+        "UPDATE transactions
+            SET occurred_on = ?1, type = 'transfer', amount = ?2, account_id = ?3,
+                counter_account_id = ?4, category_id = NULL,
+                description = ?5, updated_at = ?6
+          WHERE id = ?7 AND type = 'transfer'",
+        params![
+            input.occurred_on,
+            input.amount,
+            input.account_id,
+            input.counter_account_id,
+            input.description,
+            input.now,
+            id,
+        ],
+    )?;
+    if n == 0 {
+        return Err(AppError::NotFound(format!("transfer {id}")));
+    }
+    Ok(())
+}
