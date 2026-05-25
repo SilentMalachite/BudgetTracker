@@ -8,3 +8,6 @@ export type AppInfo = {
 export async function getAppInfo(): Promise<AppInfo> {
   return invoke<AppInfo>('app_info');
 }
+
+export * from './events';
+export * from './categories';
