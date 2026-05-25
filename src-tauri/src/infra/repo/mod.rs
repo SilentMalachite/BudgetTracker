@@ -5,5 +5,6 @@
 //! Repos do not lock the `Mutex<Connection>` themselves. The command layer
 //! does that and passes a borrowed connection.
 
+pub mod account_repo;
 pub mod category_repo;
 pub mod meta_repo;

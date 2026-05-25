@@ -48,6 +48,11 @@ pub fn run() {
             commands::categories::update_category,
             commands::categories::archive_category,
             commands::categories::unarchive_category,
+            commands::accounts::list_accounts,
+            commands::accounts::create_account,
+            commands::accounts::update_account,
+            commands::accounts::archive_account,
+            commands::accounts::unarchive_account,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

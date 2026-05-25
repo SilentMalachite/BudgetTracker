@@ -59,11 +59,12 @@
 
   async function submit() {
     formError = null;
-    const balance = Number.parseInt(initialBalance, 10);
-    if (!Number.isFinite(balance)) {
+    const balanceText = initialBalance.trim();
+    if (!/^-?\d+$/.test(balanceText)) {
       formError = '開始残高は整数を入力してください';
       return;
     }
+    const balance = Number.parseInt(balanceText, 10);
     try {
       if (editing) {
         await updateAccount(editing.id, {
