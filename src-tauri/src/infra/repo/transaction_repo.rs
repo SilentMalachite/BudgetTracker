@@ -43,7 +43,7 @@ fn row_to_tx(row: &rusqlite::Row<'_>) -> rusqlite::Result<Transaction> {
 }
 
 fn build_where(filter: &ListFilter) -> (String, Vec<Box<dyn ToSql>>) {
-    let mut clauses: Vec<String> = vec!["type IN ('income','expense')".into()];
+    let mut clauses: Vec<String> = Vec::new();
     let mut binds: Vec<Box<dyn ToSql>> = Vec::new();
     if let Some(from) = &filter.from {
         clauses.push("occurred_on >= ?".into());
@@ -71,7 +71,12 @@ fn build_where(filter: &ListFilter) -> (String, Vec<Box<dyn ToSql>>) {
             binds.push(Box::new(format!("%{q}%")));
         }
     }
-    (format!(" WHERE {}", clauses.join(" AND ")), binds)
+    let sql = if clauses.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", clauses.join(" AND "))
+    };
+    (sql, binds)
 }
 
 pub fn list(
