@@ -66,6 +66,7 @@ pub fn run() {
             commands::settings::get_last_backup_at,
             commands::settings::set_last_backup_at,
             commands::settings::get_db_path,
+            commands::balances::list_balances,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

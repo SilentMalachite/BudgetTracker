@@ -5,3 +5,4 @@ pub mod transactions;
 pub mod reports;
 pub mod backup;
 pub mod settings;
+pub mod balances;
