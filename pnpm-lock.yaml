@@ -14,9 +14,6 @@ importers:
       chart.js:
         specifier: ^4.5.1
         version: 4.5.1
-      svelte-spa-router:
-        specifier: ^4.0.2
-        version: 4.0.2
     devDependencies:
       '@playwright/test':
         specifier: ^1.48.0
@@ -880,10 +877,6 @@ packages:
     resolution: {integrity: sha512-GDhwkLfywWL2s6vEjyhri+eXmfH6j1L7JE27WhqLeYzoh/A3DBaYGEj2H/HFZCn/kMfim73FXxEJTw06WtxQwg==}
     engines: {node: '>= 14.18.0'}
 
-  regexparam@2.0.2:
-    resolution: {integrity: sha512-A1PeDEYMrkLrfyOwv2jwihXbo9qxdGD3atBYQA9JJgreAx8/7rC6IUkWOw2NQlOxLp2wL0ifQbh1HuidDfYA6w==}
-    engines: {node: '>=8'}
-
   rollup@4.60.4:
     resolution: {integrity: sha512-WHeFSbZYsPu3+bLoNRUuAO+wavNlocOPf3wSHTP7hcFKVnJeWsYlCDbr3mTS14FCizf9ccIxXA8sGL8zKeQN3g==}
     engines: {node: '>=18.0.0', npm: '>=8.0.0'}
@@ -926,9 +919,6 @@ packages:
     peerDependencies:
       svelte: ^4.0.0 || ^5.0.0-next.0
       typescript: '>=5.0.0'
-
-  svelte-spa-router@4.0.2:
-    resolution: {integrity: sha512-T1WYYk+ymwCr5m5U+n91k4dRAT6cw5HgmoPaI/TpKgAmuugymFoSBlfzkcKIK83QH4H8gUMn4tdQ0B9enFBM6g==}
 
   svelte@5.55.9:
     resolution: {integrity: sha512-fTjjT8cHLDwigcu2j3pv7Jq04LklXevPB8uBgyHNiTXv+RMNvVnrjS4UEYrLMkhuq1vpCodHjiW+z/95SDs/fg==}
@@ -1767,8 +1757,6 @@ snapshots:
 
   readdirp@4.1.2: {}
 
-  regexparam@2.0.2: {}
-
   rollup@4.60.4:
     dependencies:
       '@types/estree': 1.0.8
@@ -1833,10 +1821,6 @@ snapshots:
       typescript: 5.9.3
     transitivePeerDependencies:
       - picomatch
-
-  svelte-spa-router@4.0.2:
-    dependencies:
-      regexparam: 2.0.2
 
   svelte@5.55.9:
     dependencies:

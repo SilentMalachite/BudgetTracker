@@ -1,6 +1,4 @@
 <script lang="ts">
-  import { link, location } from 'svelte-spa-router';
-
   const items = [
     { path: '/', label: 'ダッシュボード', icon: '🏠' },
     { path: '/transactions', label: '取引', icon: '💸' },
@@ -13,6 +11,14 @@
     if (path === '/') return current === '/';
     return current.startsWith(path);
   }
+
+  let {
+    currentPath,
+    navigate,
+  }: {
+    currentPath: string;
+    navigate: (path: string) => void;
+  } = $props();
 </script>
 
 <nav class="sidebar" aria-label="Primary navigation">
@@ -22,9 +28,12 @@
       <li>
         <a
           href={item.path}
-          use:link
-          class:active={isActive(item.path, $location)}
+          class:active={isActive(item.path, currentPath)}
           data-testid={`nav-${item.path === '/' ? 'dashboard' : item.path.slice(1)}`}
+          onclick={(event) => {
+            event.preventDefault();
+            navigate(item.path);
+          }}
         >
           <span class="icon" aria-hidden="true">{item.icon}</span>
           <span>{item.label}</span>
