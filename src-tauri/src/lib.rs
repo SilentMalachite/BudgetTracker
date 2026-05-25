@@ -1,7 +1,7 @@
-mod commands;
-mod domain;
-mod error;
-mod infra;
+pub mod commands;
+pub mod domain;
+pub mod error;
+pub mod infra;
 
 use std::fs;
 use std::sync::Mutex;
