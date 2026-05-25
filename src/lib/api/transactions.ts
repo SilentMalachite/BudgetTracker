@@ -19,7 +19,7 @@ export type Transaction = {
 export type ListTransactionFilter = {
   from?: string;
   to?: string;
-  type?: 'income' | 'expense';
+  type?: TxType;
   category_id?: number;
   account_id?: number;
   search?: string;
