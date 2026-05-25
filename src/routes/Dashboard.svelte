@@ -120,38 +120,40 @@
     <p class="error">エラー: {error}</p>
   {/if}
 
-  <Card>
-    {#snippet children()}
-      <div class="assets-card">
-        <div class="assets-head">
-          <small>総資産</small>
-          <strong data-testid="card-total-assets">{yen.format(balancesStore.totalAssets)}</strong>
-          {#if balancesStore.error}
-            <small class="error">エラー: {balancesStore.error}</small>
+  <div class="assets-section">
+    <Card>
+      {#snippet children()}
+        <div class="assets-card">
+          <div class="assets-head">
+            <small>総資産</small>
+            <strong data-testid="card-total-assets">{yen.format(balancesStore.totalAssets)}</strong>
+            {#if balancesStore.error}
+              <small class="error">エラー: {balancesStore.error}</small>
+            {/if}
+          </div>
+          {#if balancesStore.items.length === 0 && !balancesStore.loading}
+            <EmptyState title="口座がありません" hint="口座ページから追加してください" />
+          {:else}
+            <ul class="assets-list" data-testid="assets-list">
+              {#each balancesStore.items.filter((b) => b.archived_at == null).slice(0, 8) as account (account.account_id)}
+                <li>
+                  <span class="acct-name">{account.name}</span>
+                  <span class="acct-balance" data-testid={`balance-${account.account_id}`}>
+                    {yen.format(account.balance)}
+                  </span>
+                </li>
+              {/each}
+              {#if balancesStore.items.filter((b) => b.archived_at == null).length > 8}
+                <li class="more">
+                  他 {balancesStore.items.filter((b) => b.archived_at == null).length - 8} 件
+                </li>
+              {/if}
+            </ul>
           {/if}
         </div>
-        {#if balancesStore.items.length === 0 && !balancesStore.loading}
-          <EmptyState title="口座がありません" hint="口座ページから追加してください" />
-        {:else}
-          <ul class="assets-list" data-testid="assets-list">
-            {#each balancesStore.items.filter((b) => b.archived_at == null).slice(0, 8) as account (account.account_id)}
-              <li>
-                <span class="acct-name">{account.name}</span>
-                <span class="acct-balance" data-testid={`balance-${account.account_id}`}>
-                  {yen.format(account.balance)}
-                </span>
-              </li>
-            {/each}
-            {#if balancesStore.items.filter((b) => b.archived_at == null).length > 8}
-              <li class="more">
-                他 {balancesStore.items.filter((b) => b.archived_at == null).length - 8} 件
-              </li>
-            {/if}
-          </ul>
-        {/if}
-      </div>
-    {/snippet}
-  </Card>
+      {/snippet}
+    </Card>
+  </div>
 
   <div class="summary-grid">
     <Card>
@@ -381,5 +383,8 @@
   .acct-balance {
     font-weight: 700;
     font-variant-numeric: tabular-nums;
+  }
+  .assets-section {
+    margin-bottom: var(--space-5);
   }
 </style>

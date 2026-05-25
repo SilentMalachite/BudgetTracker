@@ -149,7 +149,7 @@
                 <strong>{account.name}</strong>
                 <small>{ACCOUNT_KIND_LABELS[account.kind]}</small>
               </div>
-              <span class="balance">{yen.format(account.initial_balance)}</span>
+              <span class="balance"><strong>{yen.format(account.initial_balance)}</strong></span>
               <Button variant="ghost" onclick={() => toggleArchive(account)}>
                 {#snippet children()}復元{/snippet}
               </Button>
