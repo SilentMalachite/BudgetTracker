@@ -11,3 +11,4 @@ export async function getAppInfo(): Promise<AppInfo> {
 
 export * from './events';
 export * from './categories';
+export * from './accounts';
