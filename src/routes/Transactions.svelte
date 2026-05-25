@@ -12,9 +12,12 @@
   import { createTransactionsStore } from '../lib/stores/transactions.svelte';
   import {
     createTransaction,
+    createTransfer,
     deleteTransaction,
     updateTransaction,
+    updateTransfer,
     type Transaction,
+    type TxType,
   } from '../lib/api/transactions';
   import { isoToday } from '../lib/utils/yearMonth';
 
@@ -30,14 +33,16 @@
 
   const yen = new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' });
 
-  let filterType = $state<'all' | 'income' | 'expense'>('all');
+  type FormType = 'income' | 'expense' | 'transfer';
+
+  let filterType = $state<'all' | 'income' | 'expense' | 'transfer'>('all');
   let filterFrom = $state('');
   let filterTo = $state('');
   let filterSearch = $state('');
 
   function applyFilter() {
     txStore.setFilter({
-      type: filterType === 'all' ? undefined : filterType,
+      type: filterType === 'all' ? undefined : (filterType as TxType),
       from: filterFrom || undefined,
       to: filterTo || undefined,
       search: filterSearch || undefined,
@@ -46,10 +51,11 @@
 
   let modalOpen = $state(false);
   let editing = $state<Transaction | null>(null);
-  let formType = $state<'income' | 'expense'>('expense');
+  let formType = $state<FormType>('expense');
   let formDate = $state(isoToday());
   let formAmount = $state('');
-  let formAccount = $state('');
+  let formAccount = $state('');         // source (and the only account field for income/expense)
+  let formCounterAccount = $state('');  // destination, only used when formType === 'transfer'
   let formCategory = $state('');
   let formDescription = $state('');
   let formError = $state<string | null>(null);
@@ -59,12 +65,23 @@
     return category ? String(category.id) : '';
   }
 
+  function firstAccount(): string {
+    const account = accStore.items.find((item) => !item.archived_at);
+    return account ? String(account.id) : '';
+  }
+
+  function secondAccount(): string {
+    const accounts = accStore.items.filter((item) => !item.archived_at);
+    return accounts[1] ? String(accounts[1].id) : '';
+  }
+
   function openCreate() {
     editing = null;
     formType = 'expense';
     formDate = isoToday();
     formAmount = '';
-    formAccount = accStore.items[0] ? String(accStore.items[0].id) : '';
+    formAccount = firstAccount();
+    formCounterAccount = secondAccount();
     formCategory = firstCategoryFor('expense');
     formDescription = '';
     formError = null;
@@ -72,13 +89,14 @@
   }
 
   function openEdit(transaction: Transaction) {
-    if (transaction.type === 'transfer') return;
     editing = transaction;
     formType = transaction.type;
     formDate = transaction.occurred_on;
     formAmount = String(transaction.amount);
     formAccount = String(transaction.account_id);
-    formCategory = transaction.category_id ? String(transaction.category_id) : '';
+    formCounterAccount =
+      transaction.counter_account_id != null ? String(transaction.counter_account_id) : secondAccount();
+    formCategory = transaction.category_id != null ? String(transaction.category_id) : firstCategoryFor('expense');
     formDescription = transaction.description;
     formError = null;
     modalOpen = true;
@@ -99,26 +117,62 @@
       return;
     }
     const accountId = parsePositiveInteger(formAccount);
-    const categoryId = parsePositiveInteger(formCategory);
     if (accountId == null) {
-      formError = '口座を選択してください';
+      formError = formType === 'transfer' ? '振替元口座を選択してください' : '口座を選択してください';
       return;
     }
-    if (categoryId == null) {
-      formError = 'カテゴリを選択してください';
-      return;
-    }
+
     try {
-      const payload = {
-        occurred_on: formDate,
-        type: formType,
-        amount,
-        account_id: accountId,
-        category_id: categoryId,
-        description: formDescription,
-      };
-      if (editing) await updateTransaction(editing.id, payload);
-      else await createTransaction(payload);
+      if (formType === 'transfer') {
+        const counterId = parsePositiveInteger(formCounterAccount);
+        if (counterId == null) {
+          formError = '振替先口座を選択してください';
+          return;
+        }
+        if (counterId === accountId) {
+          formError = '振替元と振替先は別の口座を選んでください';
+          return;
+        }
+        const payload = {
+          occurred_on: formDate,
+          amount,
+          account_id: accountId,
+          counter_account_id: counterId,
+          description: formDescription,
+        };
+        if (editing) {
+          if (editing.type !== 'transfer') {
+            formError = '種別の変更はできません。一度削除してから再登録してください';
+            return;
+          }
+          await updateTransfer(editing.id, payload);
+        } else {
+          await createTransfer(payload);
+        }
+      } else {
+        const categoryId = parsePositiveInteger(formCategory);
+        if (categoryId == null) {
+          formError = 'カテゴリを選択してください';
+          return;
+        }
+        const payload = {
+          occurred_on: formDate,
+          type: formType,
+          amount,
+          account_id: accountId,
+          category_id: categoryId,
+          description: formDescription,
+        };
+        if (editing) {
+          if (editing.type === 'transfer') {
+            formError = '種別の変更はできません。一度削除してから再登録してください';
+            return;
+          }
+          await updateTransaction(editing.id, payload);
+        } else {
+          await createTransaction(payload);
+        }
+      }
       modalOpen = false;
     } catch (e) {
       formError = e instanceof Error ? e.message : String(e);
@@ -135,24 +189,64 @@
 
   const categoryOptions = $derived(
     catStore.items
-      .filter((category) => category.type === formType && !category.archived_at)
+      .filter((category) => (category.type === formType || formType === 'transfer') && !category.archived_at)
       .map((category) => ({ value: String(category.id), label: category.name })),
   );
+
+  const visibleAccounts = $derived(accStore.items.filter((account) => !account.archived_at));
+
   const accountOptions = $derived(
-    accStore.items
-      .filter((account) => !account.archived_at)
+    visibleAccounts.map((account) => ({ value: String(account.id), label: account.name })),
+  );
+
+  const counterAccountOptions = $derived(
+    visibleAccounts
+      .filter((account) => String(account.id) !== formAccount)
       .map((account) => ({ value: String(account.id), label: account.name })),
   );
 
   $effect(() => {
     if (!modalOpen) return;
-    if (!categoryOptions.some((option) => option.value === formCategory)) {
-      formCategory = categoryOptions[0]?.value ?? '';
+    // Keep category in sync when type switches between income/expense.
+    if (formType !== 'transfer' && !categoryOptions.some((option) => option.value === formCategory)) {
+      formCategory = firstCategoryFor(formType);
     }
+    // Keep account selections valid as the visible-accounts list changes.
     if (!accountOptions.some((option) => option.value === formAccount)) {
       formAccount = accountOptions[0]?.value ?? '';
     }
+    if (formType === 'transfer' &&
+        !counterAccountOptions.some((option) => option.value === formCounterAccount)) {
+      formCounterAccount = counterAccountOptions[0]?.value ?? '';
+    }
   });
+
+  function labelForRow(transaction: Transaction): string {
+    if (transaction.type === 'transfer') {
+      const from = accountById.get(transaction.account_id)?.name ?? '?';
+      const to =
+        transaction.counter_account_id != null
+          ? accountById.get(transaction.counter_account_id)?.name ?? '?'
+          : '?';
+      return `${from} → ${to}`;
+    }
+    if (transaction.category_id != null) {
+      return categoryById.get(transaction.category_id)?.name ?? '-';
+    }
+    return '-';
+  }
+
+  function amountClass(type: TxType): string {
+    if (type === 'income') return 'income';
+    if (type === 'expense') return 'expense';
+    return 'transfer';
+  }
+
+  function amountSign(type: TxType): string {
+    if (type === 'income') return '+';
+    if (type === 'expense') return '-';
+    return '';
+  }
 </script>
 
 <section>
@@ -173,6 +267,7 @@
             { value: 'all', label: 'すべて' },
             { value: 'income', label: '収入' },
             { value: 'expense', label: '支出' },
+            { value: 'transfer', label: '振替' },
           ]}
         />
         <DatePicker label="開始" bind:value={filterFrom} />
@@ -192,7 +287,7 @@
           <thead>
             <tr>
               <th>日付</th>
-              <th>カテゴリ</th>
+              <th>カテゴリ / 振替</th>
               <th>口座</th>
               <th>金額</th>
               <th>メモ</th>
@@ -201,32 +296,23 @@
           </thead>
           <tbody>
             {#each txStore.items as transaction (transaction.id)}
-              <tr>
+              <tr data-testid={`tx-row-${transaction.type}`}>
                 <td>{transaction.occurred_on}</td>
+                <td>{labelForRow(transaction)}</td>
                 <td>
-                  {#if transaction.category_id != null}
-                    {categoryById.get(transaction.category_id)?.name ?? '-'}
-                  {:else}
-                    振替
-                  {/if}
+                  {accountById.get(transaction.account_id)?.name ?? '-'}
                 </td>
-                <td>{accountById.get(transaction.account_id)?.name ?? '-'}</td>
-                <td
-                  class:income={transaction.type === 'income'}
-                  class:expense={transaction.type === 'expense'}
-                >
-                  {transaction.type === 'expense' ? '-' : '+'}{yen.format(transaction.amount)}
+                <td class={amountClass(transaction.type)}>
+                  {amountSign(transaction.type)}{yen.format(transaction.amount)}
                 </td>
                 <td>{transaction.description}</td>
                 <td class="actions">
-                  {#if transaction.type !== 'transfer'}
-                    <Button variant="ghost" onclick={() => openEdit(transaction)}>
-                      {#snippet children()}編集{/snippet}
-                    </Button>
-                    <Button variant="ghost" onclick={() => remove(transaction)}>
-                      {#snippet children()}削除{/snippet}
-                    </Button>
-                  {/if}
+                  <Button variant="ghost" onclick={() => openEdit(transaction)}>
+                    {#snippet children()}編集{/snippet}
+                  </Button>
+                  <Button variant="ghost" onclick={() => remove(transaction)}>
+                    {#snippet children()}削除{/snippet}
+                  </Button>
                 </td>
               </tr>
             {/each}
@@ -268,19 +354,37 @@
       options={[
         { value: 'expense', label: '支出' },
         { value: 'income', label: '収入' },
+        { value: 'transfer', label: '振替' },
       ]}
       testid="tx-type"
     />
     <DatePicker label="日付" required bind:value={formDate} testid="tx-date" />
     <TextField label="金額 (円)" required type="number" bind:value={formAmount} testid="tx-amount" />
-    <Select label="口座" required bind:value={formAccount} options={accountOptions} testid="tx-account" />
-    <Select
-      label="カテゴリ"
-      required
-      bind:value={formCategory}
-      options={categoryOptions}
-      testid="tx-category"
-    />
+    {#if formType === 'transfer'}
+      <Select
+        label="振替元口座"
+        required
+        bind:value={formAccount}
+        options={accountOptions}
+        testid="tx-account"
+      />
+      <Select
+        label="振替先口座"
+        required
+        bind:value={formCounterAccount}
+        options={counterAccountOptions}
+        testid="tx-counter-account"
+      />
+    {:else}
+      <Select label="口座" required bind:value={formAccount} options={accountOptions} testid="tx-account" />
+      <Select
+        label="カテゴリ"
+        required
+        bind:value={formCategory}
+        options={categoryOptions}
+        testid="tx-category"
+      />
+    {/if}
     <TextField label="メモ" bind:value={formDescription} testid="tx-description" />
     {#if formError}<small class="error">{formError}</small>{/if}
   {/snippet}
@@ -333,6 +437,11 @@
 
   td.expense {
     color: var(--danger);
+    font-weight: 700;
+  }
+
+  td.transfer {
+    color: var(--muted);
     font-weight: 700;
   }
 
