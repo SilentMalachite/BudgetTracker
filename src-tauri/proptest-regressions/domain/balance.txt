@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc fb9db2c838838ee4e5a0125bc2536ab92ec96cb8c954fbdea9a8275c779ea0c7 # shrinks to txs = [Transaction { id: 0, occurred_on: "2026-05-25", type_: Transfer, amount: 1, account_id: 1, counter_account_id: Some(102), category_id: None, description: "", recurring_id: None, created_at: "2026-05-25T00:00:00Z", updated_at: "2026-05-25T00:00:00Z" }], initial_a = 0, initial_b = 0
