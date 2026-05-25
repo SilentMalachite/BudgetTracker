@@ -13,6 +13,8 @@ test('app shell renders with dashboard route', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'カテゴリ' })).toBeVisible();
   await page.getByTestId('nav-accounts').click();
   await expect(page.getByRole('heading', { name: '口座' })).toBeVisible();
+  await page.getByTestId('nav-transactions').click();
+  await expect(page.getByRole('heading', { name: '取引' })).toBeVisible();
 
   // ページレベルの未捕捉エラーは出ていないこと
   expect(consoleErrors).toEqual([]);
