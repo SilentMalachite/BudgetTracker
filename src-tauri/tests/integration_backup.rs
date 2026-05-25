@@ -202,6 +202,78 @@ fn import_rejects_wrong_schema_version() {
 }
 
 #[test]
+fn export_then_overwrite_import_preserves_transfer_row() {
+    use budget_tracker_lib::commands::backup::{export_snapshot_json, import_snapshot_json};
+    use budget_tracker_lib::infra::repo::balance_repo;
+
+    // --- Source DB: two accounts + one transfer ---
+    let mut src = rusqlite::Connection::open_in_memory().unwrap();
+    migrations::run(&mut src).unwrap();
+    let cash = account_repo::insert(
+        &src,
+        &account_repo::InsertInput {
+            name: "cash",
+            kind: AccountKind::Cash,
+            currency: "JPY",
+            initial_balance: 50_000,
+            display_order: 0,
+            note: "",
+            now: NOW,
+        },
+    )
+    .unwrap();
+    let bank = account_repo::insert(
+        &src,
+        &account_repo::InsertInput {
+            name: "bank",
+            kind: AccountKind::Bank,
+            currency: "JPY",
+            initial_balance: 200_000,
+            display_order: 1,
+            note: "",
+            now: NOW,
+        },
+    )
+    .unwrap();
+    let transfer_id = transaction_repo::insert_transfer(
+        &src,
+        &transaction_repo::InsertTransferInput {
+            occurred_on: "2026-05-25",
+            amount: 30_000,
+            account_id: bank,
+            counter_account_id: cash,
+            description: "ATM",
+            now: NOW,
+        },
+    )
+    .unwrap();
+
+    let src_balances = balance_repo::list_balances(&src).unwrap();
+    let src_total: i64 = src_balances.iter().map(|b| b.balance).sum();
+
+    // --- Snapshot to JSON ---
+    let snapshot = export_snapshot_json(&src).unwrap();
+
+    // --- Destination DB: empty, imported in 'overwrite' mode ---
+    let mut dst = rusqlite::Connection::open_in_memory().unwrap();
+    migrations::run(&mut dst).unwrap();
+    let _import_result = import_snapshot_json(&mut dst, &snapshot, "overwrite").unwrap();
+
+    // 1) Transfer row is back with the same shape.
+    let restored = transaction_repo::find_by_id(&dst, transfer_id).unwrap();
+    assert!(matches!(restored.type_, TxType::Transfer));
+    assert_eq!(restored.amount, 30_000);
+    assert_eq!(restored.account_id, bank);
+    assert_eq!(restored.counter_account_id, Some(cash));
+    assert!(restored.category_id.is_none());
+
+    // 2) Aggregate balance survives.
+    let dst_balances = balance_repo::list_balances(&dst).unwrap();
+    let dst_total: i64 = dst_balances.iter().map(|b| b.balance).sum();
+    assert_eq!(src_total, dst_total);
+}
+
+#[test]
 fn overwrite_import_does_not_restore_last_backup_at() {
     let source = seeded_db();
     source
