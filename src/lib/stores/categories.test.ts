@@ -52,6 +52,7 @@ describe('categories store', () => {
 
     const store = createCategoriesStore();
     await vi.waitFor(() => expect(listMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(onChangedMock).toHaveBeenCalledTimes(1));
     listMock.mockResolvedValueOnce([
       {
         id: 2,
@@ -77,6 +78,7 @@ describe('categories store', () => {
     listMock.mockResolvedValue([]);
     const store = createCategoriesStore();
     await vi.waitFor(() => expect(listMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(onChangedMock).toHaveBeenCalledTimes(1));
     trigger?.('accounts');
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(listMock).toHaveBeenCalledTimes(1);

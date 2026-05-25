@@ -19,6 +19,7 @@ export function createCategoriesStore(
   let error = $state<string | null>(null);
   let filter = $state<ListCategoryFilter>(initialFilter);
   let unlisten: UnlistenFn | null = null;
+  let disposed = false;
 
   async function load() {
     loading = true;
@@ -38,10 +39,16 @@ export function createCategoriesStore(
   }
 
   void (async () => {
-    unlisten = await onDataChanged((domain) => {
-      if (domain === 'categories') void load();
-    });
     await load();
+    try {
+      const nextUnlisten = await onDataChanged((domain) => {
+        if (domain === 'categories') void load();
+      });
+      if (disposed) nextUnlisten();
+      else unlisten = nextUnlisten;
+    } catch {
+      // Browser-only E2E has no Tauri event bus; initial load should still run.
+    }
   })();
 
   return {
@@ -57,6 +64,7 @@ export function createCategoriesStore(
     load,
     setFilter,
     async dispose() {
+      disposed = true;
       if (unlisten) {
         unlisten();
         unlisten = null;

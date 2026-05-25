@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import Button from '../lib/components/Button.svelte';
   import Card from '../lib/components/Card.svelte';
   import CategoryBadge from '../lib/components/CategoryBadge.svelte';
@@ -17,6 +18,9 @@
   import { createCategoriesStore } from '../lib/stores/categories.svelte';
 
   const store = createCategoriesStore({ include_archived: true });
+  onDestroy(() => {
+    void store.dispose();
+  });
 
   let modalOpen = $state(false);
   let editing = $state<Category | null>(null);

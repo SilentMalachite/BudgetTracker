@@ -29,9 +29,11 @@ pub fn run() {
                 .expect("failed to acquire DB key from OS keychain");
 
             let db_path = data_dir.join(DB_FILENAME);
-            let mut conn = db::open_encrypted(&db_path, &key)
-                .expect("failed to open encrypted database");
+            let mut conn =
+                db::open_encrypted(&db_path, &key).expect("failed to open encrypted database");
             let _version = migrations::run(&mut conn).expect("failed to apply migrations");
+            crate::domain::seed::seed_default_categories_if_needed(&mut conn)
+                .expect("failed to seed default categories");
 
             app.manage(AppState {
                 conn: Mutex::new(conn),
@@ -39,7 +41,14 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![app_info])
+        .invoke_handler(tauri::generate_handler![
+            app_info,
+            commands::categories::list_categories,
+            commands::categories::create_category,
+            commands::categories::update_category,
+            commands::categories::archive_category,
+            commands::categories::unarchive_category,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
