@@ -16,3 +16,4 @@ export * from './transactions';
 export * from './reports';
 export * from './backup';
 export * from './settings';
+export * from './balances';
