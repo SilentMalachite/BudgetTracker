@@ -20,13 +20,14 @@ pub enum AppError {
     #[error("corrupt data: {0}")]
     Corrupt(String),
 
-    #[allow(dead_code)]
     #[error("not found: {0}")]
     NotFound(String),
 
-    #[allow(dead_code)]
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
+
+    #[error("conflict: {0}")]
+    Conflict(String),
 }
 
 pub type AppResult<T> = Result<T, AppError>;
@@ -52,5 +53,17 @@ mod tests {
         let err = AppError::InvalidArgument("amount must be > 0".into());
         let json = serde_json::to_string(&err).unwrap();
         assert_eq!(json, "\"invalid argument: amount must be > 0\"");
+    }
+
+    #[test]
+    fn conflict_displays_message() {
+        let err = AppError::Conflict("name already exists".into());
+        assert_eq!(err.to_string(), "conflict: name already exists");
+    }
+
+    #[test]
+    fn not_found_displays_message() {
+        let err = AppError::NotFound("category 42".into());
+        assert_eq!(err.to_string(), "not found: category 42");
     }
 }
