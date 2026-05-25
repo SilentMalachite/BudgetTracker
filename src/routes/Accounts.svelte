@@ -17,10 +17,13 @@
     type AccountKind,
   } from '../lib/api/accounts';
   import { createAccountsStore } from '../lib/stores/accounts.svelte';
+  import { createBalancesStore } from '../lib/stores/balances.svelte';
 
   const store = createAccountsStore(true);
+  const balances = createBalancesStore();
   onDestroy(() => {
     void store.dispose();
+    void balances.dispose();
   });
 
   const yen = new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' });
@@ -89,6 +92,9 @@
 
   const visible = $derived(store.items.filter((account) => !account.archived_at));
   const archived = $derived(store.items.filter((account) => !!account.archived_at));
+  const balanceById = $derived(
+    new Map(balances.items.map((row) => [row.account_id, row.balance])),
+  );
 </script>
 
 <section>
@@ -112,7 +118,12 @@
                 <strong>{account.name}</strong>
                 <small>{ACCOUNT_KIND_LABELS[account.kind]}</small>
               </div>
-              <span class="balance">{yen.format(account.initial_balance)}</span>
+              <span class="balance" data-testid={`account-balance-${account.id}`}>
+                <strong>{yen.format(balanceById.get(account.id) ?? account.initial_balance)}</strong>
+                {#if (balanceById.get(account.id) ?? account.initial_balance) !== account.initial_balance}
+                  <small>初期 {yen.format(account.initial_balance)}</small>
+                {/if}
+              </span>
               <Button variant="ghost" onclick={() => openEdit(account)}>
                 {#snippet children()}編集{/snippet}
               </Button>
@@ -233,8 +244,17 @@
   }
 
   .balance {
-    font-weight: 700;
     font-variant-numeric: tabular-nums;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    line-height: 1.2;
+  }
+  .balance strong {
+    font-weight: 700;
+  }
+  .balance small {
+    color: var(--muted);
   }
 
   .error {
