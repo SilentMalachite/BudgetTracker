@@ -2,7 +2,7 @@ use std::path::Path;
 
 use rusqlite::Connection;
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::infra::keychain::{DbKey, KEY_LEN};
 
 fn key_to_hex(key: &DbKey) -> String {
@@ -25,7 +25,19 @@ pub fn open_encrypted(path: &Path, key: &DbKey) -> AppResult<Connection> {
     conn.pragma_update(None, "foreign_keys", "ON")?;
     // Touch the database to force PRAGMA key to take effect on first use.
     conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))?;
+    // SELECT does not persist pages. A 0-byte file would later open under any
+    // key as a new database, so VACUUM empty files to write the encrypted header.
+    if path.metadata()?.len() == 0 {
+        conn.execute_batch("VACUUM")?;
+    }
     Ok(conn)
+}
+
+pub fn looks_like_decrypt_failure(err: &AppError) -> bool {
+    let text = err.to_string().to_lowercase();
+    text.contains("not a database")
+        || text.contains("file is encrypted")
+        || text.contains("hmac check failed")
 }
 
 #[cfg(test)]
@@ -57,7 +69,9 @@ mod tests {
         }
 
         let conn = open_encrypted(&path, &key).unwrap();
-        let v: String = conn.query_row("SELECT v FROM t WHERE id=1", [], |r| r.get(0)).unwrap();
+        let v: String = conn
+            .query_row("SELECT v FROM t WHERE id=1", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(v, "hello");
     }
 
@@ -76,6 +90,11 @@ mod tests {
 
         let bad = open_encrypted(&path, &wrong);
         assert!(bad.is_err(), "opening with wrong key must fail");
+        let err = bad.unwrap_err();
+        assert!(
+            looks_like_decrypt_failure(&err),
+            "wrong key should look like decrypt failure: {err}"
+        );
     }
 
     #[test]
@@ -84,10 +103,8 @@ mod tests {
         let path = tmp.path().join("data.db");
         let key = make_key(42);
         let conn = open_encrypted(&path, &key).unwrap();
-        conn.execute_batch(
-            "CREATE TABLE t(v TEXT); INSERT INTO t(v) VALUES('SUPERSECRET_TOKEN');",
-        )
-        .unwrap();
+        conn.execute_batch("CREATE TABLE t(v TEXT); INSERT INTO t(v) VALUES('SUPERSECRET_TOKEN');")
+            .unwrap();
         drop(conn);
         let bytes = std::fs::read(&path).unwrap();
         assert!(

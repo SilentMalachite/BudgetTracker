@@ -1,5 +1,5 @@
-use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
+use base64::Engine as _;
 use rand::RngCore;
 
 use crate::error::{AppError, AppResult};
@@ -7,38 +7,54 @@ use crate::error::{AppError, AppResult};
 pub const KEY_LEN: usize = 32;
 pub type DbKey = [u8; KEY_LEN];
 
-/// Retrieve the stored DB key or, if absent, generate a new 32-byte key,
-/// store it in the OS keychain, and return it.
-///
-/// `service` typically: "jp.budget-tracker"
-/// `account` typically: "db_key"
-pub fn get_or_create_key(service: &str, account: &str) -> AppResult<DbKey> {
+pub fn get_key(service: &str, account: &str) -> AppResult<Option<DbKey>> {
     let entry = keyring::Entry::new(service, account)?;
     match entry.get_password() {
-        Ok(b64) => {
-            let raw = STANDARD_NO_PAD.decode(b64.as_bytes())?;
-            if raw.len() != KEY_LEN {
-                return Err(AppError::Corrupt(format!(
-                    "corrupt keychain entry: stored key has wrong length: {}",
-                    raw.len()
-                )));
-            }
-            let mut out = [0u8; KEY_LEN];
-            out.copy_from_slice(&raw);
-            Ok(out)
-        }
-        Err(keyring::Error::NoEntry) => {
-            let mut key = [0u8; KEY_LEN];
-            rand::thread_rng().fill_bytes(&mut key);
-            let b64 = STANDARD_NO_PAD.encode(key);
-            entry.set_password(&b64)?;
-            Ok(key)
-        }
+        Ok(b64) => Ok(Some(decode_key(&b64)?)),
+        Err(keyring::Error::NoEntry) => Ok(None),
         Err(e) => Err(e.into()),
     }
 }
 
-#[cfg(test)]
+pub fn create_key(service: &str, account: &str) -> AppResult<DbKey> {
+    if get_key(service, account)?.is_some() {
+        return Err(AppError::Conflict("keychain entry already exists".into()));
+    }
+    let mut key = [0u8; KEY_LEN];
+    rand::thread_rng().fill_bytes(&mut key);
+    let entry = keyring::Entry::new(service, account)?;
+    entry.set_password(&STANDARD_NO_PAD.encode(key))?;
+    Ok(key)
+}
+
+fn decode_key(b64: &str) -> AppResult<DbKey> {
+    let raw = STANDARD_NO_PAD.decode(b64.as_bytes())?;
+    if raw.len() != KEY_LEN {
+        return Err(AppError::Corrupt(format!(
+            "corrupt keychain entry: stored key has wrong length: {}",
+            raw.len()
+        )));
+    }
+    let mut out = [0u8; KEY_LEN];
+    out.copy_from_slice(&raw);
+    Ok(out)
+}
+
+/// Retrieve the stored DB key or, if absent, generate a new 32-byte key,
+/// store it in the OS keychain, and return it.
+///
+/// Test-only / legacy wrapper. Production boot must call `get_key` / `create_key`
+/// explicitly so an existing `data.db` never gets a freshly minted key.
+///
+/// `service` typically: "jp.budget-tracker"
+/// `account` typically: "db_key"
+pub fn get_or_create_key(service: &str, account: &str) -> AppResult<DbKey> {
+    match get_key(service, account)? {
+        Some(key) => Ok(key),
+        None => create_key(service, account),
+    }
+}
+
 pub fn delete_key(service: &str, account: &str) -> AppResult<()> {
     let entry = keyring::Entry::new(service, account)?;
     match entry.delete_credential() {
@@ -184,6 +200,43 @@ mod tests {
             "expected Corrupt error, got: {:?}",
             result
         );
+        delete_key("test", &account).unwrap();
+    }
+
+    #[test]
+    fn get_returns_none_when_absent() {
+        ensure_mock();
+        let account = unique_account("get-none");
+        let got = get_key("test", &account).unwrap();
+        assert!(got.is_none());
+    }
+
+    #[test]
+    fn get_does_not_create_an_entry() {
+        ensure_mock();
+        let account = unique_account("get-no-create");
+        let _ = get_key("test", &account).unwrap();
+        let again = get_key("test", &account).unwrap();
+        assert!(again.is_none());
+    }
+
+    #[test]
+    fn create_persists_and_get_returns_it() {
+        ensure_mock();
+        let account = unique_account("create-get");
+        let created = create_key("test", &account).unwrap();
+        let got = get_key("test", &account).unwrap().unwrap();
+        assert_eq!(created, got);
+        delete_key("test", &account).unwrap();
+    }
+
+    #[test]
+    fn create_fails_if_entry_exists() {
+        ensure_mock();
+        let account = unique_account("create-exists");
+        create_key("test", &account).unwrap();
+        let err = create_key("test", &account).unwrap_err();
+        assert!(matches!(err, AppError::Conflict(_)));
         delete_key("test", &account).unwrap();
     }
 }

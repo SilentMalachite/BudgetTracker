@@ -1,3 +1,4 @@
+pub mod boot;
 pub mod db;
 pub mod events;
 pub mod keychain;
