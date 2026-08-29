@@ -17,16 +17,21 @@ export function createBalancesStore(): BalancesStore {
   let error = $state<string | null>(null);
   let unlisten: UnlistenFn | null = null;
   let disposed = false;
+  let requestId = 0;
 
   async function load() {
+    const id = ++requestId;
     loading = true;
     error = null;
     try {
-      items = await listBalances();
+      const res = await listBalances();
+      if (id !== requestId) return;
+      items = res;
     } catch (e) {
+      if (id !== requestId) return;
       error = e instanceof Error ? e.message : String(e);
     } finally {
-      loading = false;
+      if (id === requestId) loading = false;
     }
   }
 

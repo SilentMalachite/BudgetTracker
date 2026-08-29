@@ -19,16 +19,21 @@ export function createBudgetsStore(initialYearMonth: string): BudgetsStore {
   let yearMonth = $state(initialYearMonth);
   let unlisten: UnlistenFn | null = null;
   let disposed = false;
+  let requestId = 0;
 
   async function load() {
+    const id = ++requestId;
     loading = true;
     error = null;
     try {
-      items = await listBudgetStatuses(yearMonth);
+      const res = await listBudgetStatuses(yearMonth);
+      if (id !== requestId) return;
+      items = res;
     } catch (e) {
+      if (id !== requestId) return;
       error = e instanceof Error ? e.message : String(e);
     } finally {
-      loading = false;
+      if (id === requestId) loading = false;
     }
   }
 

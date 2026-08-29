@@ -33,18 +33,22 @@ export function createTransactionsStore(
   let filter = $state<ListTransactionFilter>(initialFilter);
   let unlisten: UnlistenFn | null = null;
   let disposed = false;
+  let requestId = 0;
 
   async function load() {
+    const id = ++requestId;
     loading = true;
     error = null;
     try {
       const res = await listTransactions(filter, page, pageSize);
+      if (id !== requestId) return;
       items = res.items;
       total = res.total;
     } catch (e) {
+      if (id !== requestId) return;
       error = e instanceof Error ? e.message : String(e);
     } finally {
-      loading = false;
+      if (id === requestId) loading = false;
     }
   }
 

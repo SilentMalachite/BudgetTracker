@@ -18,16 +18,21 @@ export function createAccountsStore(initialIncludeArchived = false): AccountsSto
   let includeArchived = $state(initialIncludeArchived);
   let unlisten: UnlistenFn | null = null;
   let disposed = false;
+  let requestId = 0;
 
   async function load() {
+    const id = ++requestId;
     loading = true;
     error = null;
     try {
-      items = await listAccounts(includeArchived);
+      const res = await listAccounts(includeArchived);
+      if (id !== requestId) return;
+      items = res;
     } catch (e) {
+      if (id !== requestId) return;
       error = e instanceof Error ? e.message : String(e);
     } finally {
-      loading = false;
+      if (id === requestId) loading = false;
     }
   }
 

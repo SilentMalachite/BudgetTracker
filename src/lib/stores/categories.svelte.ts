@@ -20,16 +20,21 @@ export function createCategoriesStore(
   let filter = $state<ListCategoryFilter>(initialFilter);
   let unlisten: UnlistenFn | null = null;
   let disposed = false;
+  let requestId = 0;
 
   async function load() {
+    const id = ++requestId;
     loading = true;
     error = null;
     try {
-      items = await listCategories(filter);
+      const res = await listCategories(filter);
+      if (id !== requestId) return;
+      items = res;
     } catch (e) {
+      if (id !== requestId) return;
       error = e instanceof Error ? e.message : String(e);
     } finally {
-      loading = false;
+      if (id === requestId) loading = false;
     }
   }
 

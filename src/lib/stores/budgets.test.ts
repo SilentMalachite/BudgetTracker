@@ -88,6 +88,31 @@ describe('budgets store', () => {
     await store.dispose();
   });
 
+  it('ignores a stale list response', async () => {
+    listMock.mockResolvedValueOnce([status(1, '食費')]);
+
+    const store = createBudgetsStore('2026-05');
+    await vi.waitFor(() => expect(store.items).toHaveLength(1));
+
+    let resolveOld: (value: unknown) => void = () => {};
+    const oldPromise = new Promise((resolve) => {
+      resolveOld = resolve;
+    });
+    listMock.mockImplementationOnce(() => oldPromise);
+    listMock.mockResolvedValueOnce([status(3, '光熱費')]);
+
+    store.setYearMonth('2026-06');
+    await vi.waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
+    store.setYearMonth('2026-07');
+    await vi.waitFor(() => expect(store.items[0]?.category_name).toBe('光熱費'));
+
+    resolveOld([status(2, '交通費')]);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(store.items[0]?.category_name).toBe('光熱費');
+    expect(store.yearMonth).toBe('2026-07');
+    await store.dispose();
+  });
+
   it('ignores unrelated domain changes', async () => {
     let trigger: ((domain: string) => void) | undefined;
     onChangedMock.mockImplementation((cb: (d: string) => void) => {
