@@ -89,6 +89,8 @@ fn current_version(conn: &Connection) -> AppResult<u32> {
 
 /// Apply all pending migrations against `conn`. Returns the new schema_version.
 pub fn run(conn: &mut Connection) -> AppResult<u32> {
+    // V001's PRAGMA foreign_keys is a no-op inside a migration transaction.
+    conn.pragma_update(None, "foreign_keys", "ON")?;
     let mut version = current_version(conn)?;
     let migrations = load_migrations()?;
     for m in &migrations {

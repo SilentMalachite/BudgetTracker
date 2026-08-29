@@ -188,6 +188,28 @@ fn list_includes_transfer_rows_after_slice_02() {
 }
 
 #[test]
+fn insert_rejects_missing_account_fk() {
+    let (conn, _acc, cat) = seeded_db();
+    let err = transaction_repo::insert(
+        &conn,
+        &transaction_repo::InsertInput {
+            occurred_on: "2026-05-25",
+            type_: TxType::Expense,
+            amount: 100,
+            account_id: 9_999_999,
+            category_id: cat,
+            description: "ghost",
+            now: NOW,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, budget_tracker_lib::error::AppError::Db(_)),
+        "got {err:?}"
+    );
+}
+
+#[test]
 fn delete_removes_row() {
     let (conn, acc, cat) = seeded_db();
     let id = transaction_repo::insert(
