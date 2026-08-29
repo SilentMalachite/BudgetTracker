@@ -1,9 +1,10 @@
-pub mod meta;
-pub mod categories;
 pub mod accounts;
-pub mod transactions;
-pub mod reports;
 pub mod backup;
-pub mod settings;
 pub mod balances;
 pub mod budgets;
+pub mod categories;
+pub mod meta;
+pub mod recovery;
+pub mod reports;
+pub mod settings;
+pub mod transactions;

@@ -4,7 +4,7 @@ use tauri::{AppHandle, State};
 
 use crate::commands::meta::AppState;
 use crate::domain::ledger::{self, Transaction, TxType};
-use crate::error::{AppError, AppResult};
+use crate::error::AppResult;
 use crate::infra::events::{emit_changed, ChangedDomain};
 use crate::infra::repo::transaction_repo;
 
@@ -45,11 +45,8 @@ pub fn list_transactions(
         account_id: filter.account_id,
         search: filter.search,
     };
-    let conn = state
-        .conn
-        .lock()
-        .map_err(|_| AppError::Corrupt("connection mutex poisoned".into()))?;
-    let (items, total) = transaction_repo::list(&conn, &repo_filter, page, page_size)?;
+    let (items, total) =
+        state.with_conn(|conn| transaction_repo::list(conn, &repo_filter, page, page_size))?;
     Ok(ListTransactionResult { items, total })
 }
 
@@ -80,26 +77,24 @@ pub fn create_transaction(
         description: &input.description,
     })?;
     let now = now_iso();
-    let mut conn = state
-        .conn
-        .lock()
-        .map_err(|_| AppError::Corrupt("connection mutex poisoned".into()))?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let id = transaction_repo::insert(
-        &tx,
-        &transaction_repo::InsertInput {
-            occurred_on: &validated.occurred_on,
-            type_: validated.type_,
-            amount: validated.amount,
-            account_id: validated.account_id,
-            category_id: validated.category_id,
-            description: &validated.description,
-            now: &now,
-        },
-    )?;
-    let transaction = transaction_repo::find_by_id(&tx, id)?;
-    tx.commit()?;
-    drop(conn);
+    let transaction = state.with_conn_mut(|conn| {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let id = transaction_repo::insert(
+            &tx,
+            &transaction_repo::InsertInput {
+                occurred_on: &validated.occurred_on,
+                type_: validated.type_,
+                amount: validated.amount,
+                account_id: validated.account_id,
+                category_id: validated.category_id,
+                description: &validated.description,
+                now: &now,
+            },
+        )?;
+        let transaction = transaction_repo::find_by_id(&tx, id)?;
+        tx.commit()?;
+        Ok(transaction)
+    })?;
     emit_changed(&app, ChangedDomain::Transactions);
     Ok(transaction)
 }
@@ -132,41 +127,37 @@ pub fn update_transaction(
         description: &patch.description,
     })?;
     let now = now_iso();
-    let mut conn = state
-        .conn
-        .lock()
-        .map_err(|_| AppError::Corrupt("connection mutex poisoned".into()))?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    transaction_repo::update(
-        &tx,
-        id,
-        &transaction_repo::UpdateInput {
-            occurred_on: &validated.occurred_on,
-            type_: validated.type_,
-            amount: validated.amount,
-            account_id: validated.account_id,
-            category_id: validated.category_id,
-            description: &validated.description,
-            now: &now,
-        },
-    )?;
-    let transaction = transaction_repo::find_by_id(&tx, id)?;
-    tx.commit()?;
-    drop(conn);
+    let transaction = state.with_conn_mut(|conn| {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction_repo::update(
+            &tx,
+            id,
+            &transaction_repo::UpdateInput {
+                occurred_on: &validated.occurred_on,
+                type_: validated.type_,
+                amount: validated.amount,
+                account_id: validated.account_id,
+                category_id: validated.category_id,
+                description: &validated.description,
+                now: &now,
+            },
+        )?;
+        let transaction = transaction_repo::find_by_id(&tx, id)?;
+        tx.commit()?;
+        Ok(transaction)
+    })?;
     emit_changed(&app, ChangedDomain::Transactions);
     Ok(transaction)
 }
 
 #[tauri::command]
 pub fn delete_transaction(app: AppHandle, state: State<'_, AppState>, id: i64) -> AppResult<()> {
-    let mut conn = state
-        .conn
-        .lock()
-        .map_err(|_| AppError::Corrupt("connection mutex poisoned".into()))?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    transaction_repo::delete(&tx, id)?;
-    tx.commit()?;
-    drop(conn);
+    state.with_conn_mut(|conn| {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction_repo::delete(&tx, id)?;
+        tx.commit()?;
+        Ok(())
+    })?;
     emit_changed(&app, ChangedDomain::Transactions);
     Ok(())
 }
@@ -195,25 +186,23 @@ pub fn create_transfer(
         description: &input.description,
     })?;
     let now = now_iso();
-    let mut conn = state
-        .conn
-        .lock()
-        .map_err(|_| AppError::Corrupt("connection mutex poisoned".into()))?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let id = transaction_repo::insert_transfer(
-        &tx,
-        &transaction_repo::InsertTransferInput {
-            occurred_on: &validated.occurred_on,
-            amount: validated.amount,
-            account_id: validated.account_id,
-            counter_account_id: validated.counter_account_id,
-            description: &validated.description,
-            now: &now,
-        },
-    )?;
-    let transaction = transaction_repo::find_by_id(&tx, id)?;
-    tx.commit()?;
-    drop(conn);
+    let transaction = state.with_conn_mut(|conn| {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let id = transaction_repo::insert_transfer(
+            &tx,
+            &transaction_repo::InsertTransferInput {
+                occurred_on: &validated.occurred_on,
+                amount: validated.amount,
+                account_id: validated.account_id,
+                counter_account_id: validated.counter_account_id,
+                description: &validated.description,
+                now: &now,
+            },
+        )?;
+        let transaction = transaction_repo::find_by_id(&tx, id)?;
+        tx.commit()?;
+        Ok(transaction)
+    })?;
     emit_changed(&app, ChangedDomain::Transactions);
     Ok(transaction)
 }
@@ -243,26 +232,24 @@ pub fn update_transfer(
         description: &patch.description,
     })?;
     let now = now_iso();
-    let mut conn = state
-        .conn
-        .lock()
-        .map_err(|_| AppError::Corrupt("connection mutex poisoned".into()))?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    transaction_repo::update_transfer(
-        &tx,
-        id,
-        &transaction_repo::UpdateTransferInput {
-            occurred_on: &validated.occurred_on,
-            amount: validated.amount,
-            account_id: validated.account_id,
-            counter_account_id: validated.counter_account_id,
-            description: &validated.description,
-            now: &now,
-        },
-    )?;
-    let transaction = transaction_repo::find_by_id(&tx, id)?;
-    tx.commit()?;
-    drop(conn);
+    let transaction = state.with_conn_mut(|conn| {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction_repo::update_transfer(
+            &tx,
+            id,
+            &transaction_repo::UpdateTransferInput {
+                occurred_on: &validated.occurred_on,
+                amount: validated.amount,
+                account_id: validated.account_id,
+                counter_account_id: validated.counter_account_id,
+                description: &validated.description,
+                now: &now,
+            },
+        )?;
+        let transaction = transaction_repo::find_by_id(&tx, id)?;
+        tx.commit()?;
+        Ok(transaction)
+    })?;
     emit_changed(&app, ChangedDomain::Transactions);
     Ok(transaction)
 }

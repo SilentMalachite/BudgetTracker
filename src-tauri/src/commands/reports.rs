@@ -16,11 +16,7 @@ pub fn monthly_summary(
             "month out of range: {month}"
         )));
     }
-    let conn = state
-        .conn
-        .lock()
-        .map_err(|_| AppError::Corrupt("connection mutex poisoned".into()))?;
-    report_repo::monthly_summary(&conn, year, month)
+    state.with_conn(|conn| report_repo::monthly_summary(conn, year, month))
 }
 
 #[tauri::command]
@@ -34,10 +30,6 @@ pub fn monthly_series(state: State<'_, AppState>, months: u32) -> AppResult<Vec<
     let today = chrono::Local::now().date_naive();
     let end = report::year_month_from_date(today);
     let start = end.step_back(months - 1);
-    let conn = state
-        .conn
-        .lock()
-        .map_err(|_| AppError::Corrupt("connection mutex poisoned".into()))?;
-    let raw = report_repo::monthly_buckets_since(&conn, &start.key())?;
+    let raw = state.with_conn(|conn| report_repo::monthly_buckets_since(conn, &start.key()))?;
     report::fill_monthly_series(&raw, end, months)
 }

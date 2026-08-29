@@ -4,7 +4,7 @@ use tauri::{AppHandle, State};
 
 use crate::commands::meta::AppState;
 use crate::domain::category::{self, Category, CategoryType};
-use crate::error::{AppError, AppResult};
+use crate::error::AppResult;
 use crate::infra::events::{emit_changed, ChangedDomain};
 use crate::infra::repo::category_repo;
 
@@ -30,17 +30,15 @@ pub fn list_categories(
         .as_deref()
         .map(CategoryType::parse)
         .transpose()?;
-    let conn = state
-        .conn
-        .lock()
-        .map_err(|_| AppError::Corrupt("connection mutex poisoned".into()))?;
-    category_repo::list(
-        &conn,
-        &category_repo::ListFilter {
-            type_,
-            include_archived: filter.include_archived,
-        },
-    )
+    state.with_conn(|conn| {
+        category_repo::list(
+            conn,
+            &category_repo::ListFilter {
+                type_,
+                include_archived: filter.include_archived,
+            },
+        )
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,25 +62,23 @@ pub fn create_category(
         Some(c) => Some(category::validate_color(c)?),
         None => None,
     };
-    let mut conn = state
-        .conn
-        .lock()
-        .map_err(|_| AppError::Corrupt("connection mutex poisoned".into()))?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let order = category_repo::next_display_order(&tx, type_)?;
-    let id = category_repo::insert(
-        &tx,
-        &category_repo::InsertInput {
-            name: &name,
-            type_,
-            color: color.as_deref(),
-            icon: input.icon.as_deref(),
-            display_order: order,
-        },
-    )?;
-    let cat = category_repo::find_by_id(&tx, id)?;
-    tx.commit()?;
-    drop(conn);
+    let cat = state.with_conn_mut(|conn| {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let order = category_repo::next_display_order(&tx, type_)?;
+        let id = category_repo::insert(
+            &tx,
+            &category_repo::InsertInput {
+                name: &name,
+                type_,
+                color: color.as_deref(),
+                icon: input.icon.as_deref(),
+                display_order: order,
+            },
+        )?;
+        let cat = category_repo::find_by_id(&tx, id)?;
+        tx.commit()?;
+        Ok(cat)
+    })?;
     emit_changed(&app, ChangedDomain::Categories);
     Ok(cat)
 }
@@ -128,58 +124,52 @@ pub fn update_category(
         NullablePatch::Value(None) => NullablePatch::Value(None),
         NullablePatch::Missing => NullablePatch::Missing,
     };
-    let mut conn = state
-        .conn
-        .lock()
-        .map_err(|_| AppError::Corrupt("connection mutex poisoned".into()))?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    category_repo::update(
-        &tx,
-        id,
-        &category_repo::UpdatePatch {
-            name: name.as_deref(),
-            color: match &color {
-                NullablePatch::Value(value) => Some(value.as_deref()),
-                NullablePatch::Missing => None,
+    let cat = state.with_conn_mut(|conn| {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        category_repo::update(
+            &tx,
+            id,
+            &category_repo::UpdatePatch {
+                name: name.as_deref(),
+                color: match &color {
+                    NullablePatch::Value(value) => Some(value.as_deref()),
+                    NullablePatch::Missing => None,
+                },
+                icon: match &patch.icon {
+                    NullablePatch::Value(value) => Some(value.as_deref()),
+                    NullablePatch::Missing => None,
+                },
+                display_order: patch.display_order,
             },
-            icon: match &patch.icon {
-                NullablePatch::Value(value) => Some(value.as_deref()),
-                NullablePatch::Missing => None,
-            },
-            display_order: patch.display_order,
-        },
-    )?;
-    let cat = category_repo::find_by_id(&tx, id)?;
-    tx.commit()?;
-    drop(conn);
+        )?;
+        let cat = category_repo::find_by_id(&tx, id)?;
+        tx.commit()?;
+        Ok(cat)
+    })?;
     emit_changed(&app, ChangedDomain::Categories);
     Ok(cat)
 }
 
 #[tauri::command]
 pub fn archive_category(app: AppHandle, state: State<'_, AppState>, id: i64) -> AppResult<()> {
-    let mut conn = state
-        .conn
-        .lock()
-        .map_err(|_| AppError::Corrupt("connection mutex poisoned".into()))?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    category_repo::set_archived(&tx, id, Some(&now_iso()))?;
-    tx.commit()?;
-    drop(conn);
+    state.with_conn_mut(|conn| {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        category_repo::set_archived(&tx, id, Some(&now_iso()))?;
+        tx.commit()?;
+        Ok(())
+    })?;
     emit_changed(&app, ChangedDomain::Categories);
     Ok(())
 }
 
 #[tauri::command]
 pub fn unarchive_category(app: AppHandle, state: State<'_, AppState>, id: i64) -> AppResult<()> {
-    let mut conn = state
-        .conn
-        .lock()
-        .map_err(|_| AppError::Corrupt("connection mutex poisoned".into()))?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    category_repo::set_archived(&tx, id, None)?;
-    tx.commit()?;
-    drop(conn);
+    state.with_conn_mut(|conn| {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        category_repo::set_archived(&tx, id, None)?;
+        tx.commit()?;
+        Ok(())
+    })?;
     emit_changed(&app, ChangedDomain::Categories);
     Ok(())
 }

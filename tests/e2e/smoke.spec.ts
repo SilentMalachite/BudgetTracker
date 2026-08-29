@@ -1,9 +1,11 @@
 import { expect, test } from '@playwright/test';
+import { installReadyBootMock } from './tauriMock';
 
 test('app shell renders with dashboard route', async ({ page }) => {
   const consoleErrors: string[] = [];
   page.on('pageerror', (err) => consoleErrors.push(err.message));
 
+  await installReadyBootMock(page);
   await page.goto('/');
 
   await expect(page.getByText('BudgetTracker')).toBeVisible();

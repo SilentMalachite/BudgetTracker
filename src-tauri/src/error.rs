@@ -28,6 +28,9 @@ pub enum AppError {
 
     #[error("conflict: {0}")]
     Conflict(String),
+
+    #[error("unavailable: {0}")]
+    Unavailable(String),
 }
 
 pub type AppResult<T> = Result<T, AppError>;
@@ -65,5 +68,13 @@ mod tests {
     fn not_found_displays_message() {
         let err = AppError::NotFound("category 42".into());
         assert_eq!(err.to_string(), "not found: category 42");
+    }
+
+    #[test]
+    fn unavailable_error_displays_message() {
+        assert_eq!(
+            AppError::Unavailable("recovery".into()).to_string(),
+            "unavailable: recovery"
+        );
     }
 }

@@ -170,11 +170,7 @@ pub fn export_snapshot_json(conn: &rusqlite::Connection) -> AppResult<String> {
 
 #[tauri::command]
 pub fn export_json(state: State<'_, AppState>) -> AppResult<String> {
-    let conn = state
-        .conn
-        .lock()
-        .map_err(|_| AppError::Corrupt("connection mutex poisoned".into()))?;
-    export_snapshot_json(&conn)
+    state.with_conn(export_snapshot_json)
 }
 
 #[derive(Debug, Deserialize)]
@@ -719,12 +715,8 @@ pub fn import_json(
     state: State<'_, AppState>,
     args: ImportArgs,
 ) -> AppResult<ImportResult> {
-    let mut conn = state
-        .conn
-        .lock()
-        .map_err(|_| AppError::Corrupt("connection mutex poisoned".into()))?;
-    let result = import_snapshot_json(&mut conn, &args.payload, &args.mode)?;
-    drop(conn);
+    let result =
+        state.with_conn_mut(|conn| import_snapshot_json(conn, &args.payload, &args.mode))?;
 
     emit_changed(&app, ChangedDomain::Categories);
     emit_changed(&app, ChangedDomain::Accounts);

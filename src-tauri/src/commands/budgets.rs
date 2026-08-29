@@ -63,11 +63,7 @@ pub fn list_budget_statuses(
     year_month: String,
 ) -> AppResult<Vec<BudgetStatus>> {
     let today = chrono::Local::now().date_naive();
-    let conn = state
-        .conn
-        .lock()
-        .map_err(|_| AppError::Corrupt("connection mutex poisoned".into()))?;
-    list_budget_statuses_for_conn(&conn, &year_month, today)
+    state.with_conn(|conn| list_budget_statuses_for_conn(conn, &year_month, today))
 }
 
 #[tauri::command]
@@ -76,14 +72,12 @@ pub fn set_budget(
     state: State<'_, AppState>,
     input: SetBudgetInput,
 ) -> AppResult<Budget> {
-    let mut conn = state
-        .conn
-        .lock()
-        .map_err(|_| AppError::Corrupt("connection mutex poisoned".into()))?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let budget = set_budget_for_conn(&tx, input)?;
-    tx.commit()?;
-    drop(conn);
+    let budget = state.with_conn_mut(|conn| {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let budget = set_budget_for_conn(&tx, input)?;
+        tx.commit()?;
+        Ok(budget)
+    })?;
     emit_changed(&app, ChangedDomain::Budgets);
     Ok(budget)
 }

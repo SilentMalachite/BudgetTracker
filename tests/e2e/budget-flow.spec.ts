@@ -160,6 +160,8 @@ test('budget warning appears on budgets page and dashboard', async ({ page }) =>
           }
 
           switch (command) {
+            case 'boot_status':
+              return { state: 'ready', recovery_reason: null, db_path: '/tmp/data.db' };
             case 'app_info':
               return { schema_version: 3, db_path: '/tmp/data.db' };
             case 'list_categories':
@@ -254,7 +256,9 @@ test('budget warning appears on budgets page and dashboard', async ({ page }) =>
   await page.goto('/');
   await page.getByTestId('nav-budgets').click();
   await expect(page.getByTestId('page-budgets')).toBeVisible();
-  await page.getByTestId('budget-month').fill('2026-05');
+  const now = new Date();
+  const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  await page.getByTestId('budget-month').fill(currentYearMonth);
 
   await page.getByTestId('budget-edit-1').click();
   await page.getByTestId('budget-amount').fill('50000');

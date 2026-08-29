@@ -110,6 +110,8 @@ test('transfer moves money between accounts without changing total assets', asyn
           return null;
         }
         switch (command) {
+          case 'boot_status':
+            return { state: 'ready', recovery_reason: null, db_path: '/tmp/data.db' };
           case 'app_info':
             return { schema_version: 2, db_path: '/tmp/data.db' };
           case 'list_categories':
@@ -247,6 +249,8 @@ test('accounts page surfaces balance loading errors', async ({ page }) => {
           return null;
         }
         switch (command) {
+          case 'boot_status':
+            return { state: 'ready', recovery_reason: null, db_path: '/tmp/data.db' };
           case 'app_info':
             return { schema_version: 2, db_path: '/tmp/data.db' };
           case 'list_categories':

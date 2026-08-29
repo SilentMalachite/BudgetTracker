@@ -102,6 +102,8 @@ test('happy path: add transaction and see dashboard total update', async ({ page
           }
 
           switch (command) {
+            case 'boot_status':
+              return { state: 'ready', recovery_reason: null, db_path: '/tmp/data.db' };
             case 'app_info':
               return { schema_version: 1, db_path: '/tmp/data.db' };
             case 'list_categories':

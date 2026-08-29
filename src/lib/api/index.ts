@@ -18,3 +18,4 @@ export * from './backup';
 export * from './settings';
 export * from './balances';
 export * from './budgets';
+export * from './boot';
