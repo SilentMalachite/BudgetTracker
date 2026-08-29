@@ -1,8 +1,7 @@
-use chrono::Datelike;
 use tauri::State;
 
 use crate::commands::meta::AppState;
-use crate::domain::report::{self, MonthlyBucket, YearMonth};
+use crate::domain::report::{self, MonthlyBucket};
 use crate::error::{AppError, AppResult};
 use crate::infra::repo::report_repo::{self, MonthlySummary};
 
@@ -32,11 +31,8 @@ pub fn monthly_series(state: State<'_, AppState>, months: u32) -> AppResult<Vec<
         )));
     }
 
-    let today = chrono::Utc::now().date_naive();
-    let end = YearMonth {
-        year: today.year(),
-        month: today.month(),
-    };
+    let today = chrono::Local::now().date_naive();
+    let end = report::year_month_from_date(today);
     let start = end.step_back(months - 1);
     let conn = state
         .conn

@@ -57,6 +57,14 @@ pub struct MonthlyBucket {
     pub expense: i64,
 }
 
+pub fn year_month_from_date(date: chrono::NaiveDate) -> YearMonth {
+    use chrono::Datelike;
+    YearMonth {
+        year: date.year(),
+        month: date.month(),
+    }
+}
+
 pub fn fill_monthly_series(
     buckets: &[MonthlyBucket],
     end: YearMonth,
@@ -219,5 +227,21 @@ mod tests {
 
         assert_eq!(series.len(), 3);
         assert!(series.iter().all(|b| b.year_month != "2025-01"));
+    }
+
+    #[test]
+    fn year_month_from_date_uses_the_naive_calendar_date() {
+        let d = chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        let ym = year_month_from_date(d);
+        assert_eq!(ym.key(), "2026-06");
+    }
+
+    #[test]
+    fn fill_monthly_series_ends_on_year_month_from_date() {
+        let end = year_month_from_date(chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap());
+        let series = fill_monthly_series(&[], end, 12).unwrap();
+        assert_eq!(series.len(), 12);
+        assert_eq!(series.last().unwrap().year_month, "2026-06");
+        assert_eq!(series.first().unwrap().year_month, "2025-07");
     }
 }
