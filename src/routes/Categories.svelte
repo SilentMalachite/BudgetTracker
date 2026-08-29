@@ -4,6 +4,7 @@
   import Card from '../lib/components/Card.svelte';
   import CategoryBadge from '../lib/components/CategoryBadge.svelte';
   import EmptyState from '../lib/components/EmptyState.svelte';
+  import ErrorBanner from '../lib/components/ErrorBanner.svelte';
   import Modal from '../lib/components/Modal.svelte';
   import Select from '../lib/components/Select.svelte';
   import TextField from '../lib/components/TextField.svelte';
@@ -29,6 +30,7 @@
   let color = $state('');
   let icon = $state('');
   let formError = $state<string | null>(null);
+  let actionError = $state<string | null>(null);
 
   function openCreate() {
     editing = null;
@@ -74,8 +76,13 @@
   }
 
   async function toggleArchive(category: Category) {
-    if (category.archived_at) await unarchiveCategory(category.id);
-    else await archiveCategory(category.id);
+    actionError = null;
+    try {
+      if (category.archived_at) await unarchiveCategory(category.id);
+      else await archiveCategory(category.id);
+    } catch (e) {
+      actionError = e instanceof Error ? e.message : String(e);
+    }
   }
 
   const visible = $derived(store.items.filter((category) => !category.archived_at));
@@ -92,8 +99,13 @@
 
   <Card>
     {#snippet children()}
+      {#if actionError}
+        <ErrorBanner message={actionError} />
+      {/if}
       {#if store.loading && store.items.length === 0}
         <p>読み込み中...</p>
+      {:else if store.error}
+        <ErrorBanner message={store.error} />
       {:else if visible.length === 0}
         <EmptyState title="カテゴリがありません" hint="右上の「+ 追加」から作成してください" />
       {:else}

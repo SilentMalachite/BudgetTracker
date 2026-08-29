@@ -3,6 +3,7 @@
   import Button from '../lib/components/Button.svelte';
   import Card from '../lib/components/Card.svelte';
   import EmptyState from '../lib/components/EmptyState.svelte';
+  import ErrorBanner from '../lib/components/ErrorBanner.svelte';
   import Modal from '../lib/components/Modal.svelte';
   import Select from '../lib/components/Select.svelte';
   import TextField from '../lib/components/TextField.svelte';
@@ -39,6 +40,7 @@
   let initialBalance = $state('0');
   let note = $state('');
   let formError = $state<string | null>(null);
+  let actionError = $state<string | null>(null);
 
   function openCreate() {
     editing = null;
@@ -86,8 +88,13 @@
   }
 
   async function toggleArchive(account: Account) {
-    if (account.archived_at) await unarchiveAccount(account.id);
-    else await archiveAccount(account.id);
+    actionError = null;
+    try {
+      if (account.archived_at) await unarchiveAccount(account.id);
+      else await archiveAccount(account.id);
+    } catch (e) {
+      actionError = e instanceof Error ? e.message : String(e);
+    }
   }
 
   const visible = $derived(store.items.filter((account) => !account.archived_at));
@@ -107,10 +114,15 @@
 
   <Card>
     {#snippet children()}
+      {#if actionError}
+        <ErrorBanner message={actionError} />
+      {/if}
       {#if balances.error}
         <small class="error">残高を取得できません: {balances.error}</small>
       {/if}
-      {#if visible.length === 0 && !store.loading}
+      {#if store.error}
+        <ErrorBanner message={store.error} />
+      {:else if visible.length === 0 && !store.loading}
         <EmptyState title="口座がありません" hint="右上の「+ 追加」から作成してください" />
       {:else}
         <ul class="list" data-testid="accounts-list">

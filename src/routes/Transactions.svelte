@@ -4,6 +4,7 @@
   import Card from '../lib/components/Card.svelte';
   import DatePicker from '../lib/components/DatePicker.svelte';
   import EmptyState from '../lib/components/EmptyState.svelte';
+  import ErrorBanner from '../lib/components/ErrorBanner.svelte';
   import Modal from '../lib/components/Modal.svelte';
   import Select from '../lib/components/Select.svelte';
   import TextField from '../lib/components/TextField.svelte';
@@ -60,6 +61,7 @@
   let formCategory = $state('');
   let formDescription = $state('');
   let formError = $state<string | null>(null);
+  let actionError = $state<string | null>(null);
 
   function firstCategoryFor(type: 'income' | 'expense'): string {
     const category = catStore.items.find((item) => item.type === type && !item.archived_at);
@@ -182,8 +184,13 @@
   }
 
   async function remove(transaction: Transaction) {
+    actionError = null;
     if (!confirm(`「${transaction.description || '取引'}」を削除しますか?`)) return;
-    await deleteTransaction(transaction.id);
+    try {
+      await deleteTransaction(transaction.id);
+    } catch (e) {
+      actionError = e instanceof Error ? e.message : String(e);
+    }
   }
 
   const categoryById = $derived(new Map(catStore.items.map((item) => [item.id, item])));
@@ -303,9 +310,14 @@
 
   <Card>
     {#snippet children()}
-      {#if txStore.items.length === 0 && !txStore.loading}
+      {#if txStore.error}
+        <ErrorBanner message={txStore.error} />
+      {:else if txStore.items.length === 0 && !txStore.loading}
         <EmptyState title="該当する取引がありません" hint="右上から取引を追加できます" />
       {:else}
+        {#if actionError}
+          <ErrorBanner message={actionError} />
+        {/if}
         <table data-testid="tx-table">
           <thead>
             <tr>
@@ -346,14 +358,14 @@
           <span class="spacer"></span>
           <Button
             variant="ghost"
-            disabled={txStore.page === 0}
+            disabled={txStore.loading || txStore.page === 0}
             onclick={() => txStore.setPage(txStore.page - 1)}
           >
             {#snippet children()}前へ{/snippet}
           </Button>
           <Button
             variant="ghost"
-            disabled={(txStore.page + 1) * txStore.pageSize >= txStore.total}
+            disabled={txStore.loading || (txStore.page + 1) * txStore.pageSize >= txStore.total}
             onclick={() => txStore.setPage(txStore.page + 1)}
           >
             {#snippet children()}次へ{/snippet}

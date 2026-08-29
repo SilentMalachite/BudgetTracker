@@ -4,6 +4,7 @@
   import Card from '../lib/components/Card.svelte';
   import CategoryBadge from '../lib/components/CategoryBadge.svelte';
   import EmptyState from '../lib/components/EmptyState.svelte';
+  import ErrorBanner from '../lib/components/ErrorBanner.svelte';
   import Modal from '../lib/components/Modal.svelte';
   import TextField from '../lib/components/TextField.svelte';
   import { setBudget, type BudgetStatus } from '../lib/api/budgets';
@@ -115,7 +116,7 @@
       {#if store.loading && store.items.length === 0}
         <p>読み込み中...</p>
       {:else if store.error}
-        <p class="error">{store.error}</p>
+        <ErrorBanner message={store.error} />
       {:else if store.items.length === 0}
         <EmptyState title="支出カテゴリがありません" hint="カテゴリ画面で支出カテゴリを追加してください" />
       {:else}
