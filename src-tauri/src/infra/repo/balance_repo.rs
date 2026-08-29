@@ -49,12 +49,7 @@ SELECT a.id,
  ORDER BY a.display_order ASC, a.id ASC";
 
 /// One row per account (including archived). Caller filters as needed.
-///
-/// Computes each account's current balance using two index-friendly
-/// subqueries combined with `UNION ALL`. The first leg uses
-/// `idx_tx_account`; the second uses `idx_tx_counter_account` (V002).
-/// Self-transfer is impossible because `validate_transfer_input` rejects
-/// `account_id == counter_account_id`.
+/// Uses [`LIST_BALANCES_SQL`].
 pub fn list_balances(conn: &Connection) -> AppResult<Vec<AccountBalance>> {
     let mut stmt = conn.prepare(LIST_BALANCES_SQL)?;
     let rows = stmt

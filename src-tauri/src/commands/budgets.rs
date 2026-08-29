@@ -7,6 +7,7 @@ use crate::domain::budget::{
     self, Budget, BudgetStatus, RawSetBudgetInput, ValidatedSetBudgetInput,
 };
 use crate::domain::category::CategoryType;
+use crate::domain::YearMonth;
 use crate::error::{AppError, AppResult};
 use crate::infra::events::{emit_changed, ChangedDomain};
 use crate::infra::repo::{budget_repo, category_repo};
@@ -54,7 +55,7 @@ pub fn list_budget_statuses_for_conn(
     year_month: &str,
     today: chrono::NaiveDate,
 ) -> AppResult<Vec<BudgetStatus>> {
-    budget_repo::list_statuses(conn, budget::parse_year_month(year_month)?, today)
+    budget_repo::list_statuses(conn, YearMonth::parse_key(year_month)?, today)
 }
 
 #[tauri::command]

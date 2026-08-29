@@ -6,7 +6,7 @@ use crate::domain::ledger::{Transaction, TxType};
 /// only the rows touching `account_id` (either as source or as the
 /// destination of a transfer).
 ///
-/// The rules (CLAUDE.md rule 3):
+/// The rules (AGENTS.md rule 3):
 /// - `income`   on account_id    -> +amount
 /// - `expense`  on account_id    -> -amount
 /// - `transfer` on account_id    -> -amount   (money left this account)

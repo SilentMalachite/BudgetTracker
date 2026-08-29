@@ -2,8 +2,9 @@ use chrono::NaiveDate;
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::domain::budget::{
-    self, Budget, BudgetStatus, BudgetStatusInput, ValidatedSetBudgetInput, YearMonth,
+    self, Budget, BudgetStatus, BudgetStatusInput, ValidatedSetBudgetInput,
 };
+use crate::domain::YearMonth;
 use crate::error::{AppError, AppResult};
 
 fn row_to_budget(row: &rusqlite::Row<'_>) -> rusqlite::Result<Budget> {

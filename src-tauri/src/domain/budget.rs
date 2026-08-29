@@ -1,19 +1,8 @@
 use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 
+use crate::domain::YearMonth;
 use crate::error::{AppError, AppResult};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct YearMonth {
-    pub year: i32,
-    pub month: u32,
-}
-
-impl YearMonth {
-    pub fn key(self) -> String {
-        format!("{:04}-{:02}", self.year, self.month)
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MonthBounds {
@@ -96,29 +85,7 @@ pub struct BudgetStatus {
 }
 
 pub fn parse_year_month(raw: &str) -> AppResult<YearMonth> {
-    let Some((year_raw, month_raw)) = raw.split_once('-') else {
-        return Err(AppError::InvalidArgument(format!(
-            "year_month must be YYYY-MM, got '{raw}'"
-        )));
-    };
-    if year_raw.len() != 4 || month_raw.len() != 2 {
-        return Err(AppError::InvalidArgument(format!(
-            "year_month must be YYYY-MM, got '{raw}'"
-        )));
-    }
-
-    let year = year_raw
-        .parse::<i32>()
-        .map_err(|_| AppError::InvalidArgument(format!("bad year in '{raw}'")))?;
-    let month = month_raw
-        .parse::<u32>()
-        .map_err(|_| AppError::InvalidArgument(format!("bad month in '{raw}'")))?;
-    if !(1..=12).contains(&month) {
-        return Err(AppError::InvalidArgument(format!(
-            "month out of range: {month}"
-        )));
-    }
-    Ok(YearMonth { year, month })
+    YearMonth::parse_key(raw)
 }
 
 pub fn month_bounds(year_month: YearMonth) -> AppResult<MonthBounds> {
@@ -164,7 +131,7 @@ pub fn validate_set_budget_input(
     }
     Ok(ValidatedSetBudgetInput {
         category_id: raw.category_id,
-        year_month: parse_year_month(raw.year_month)?,
+        year_month: YearMonth::parse_key(raw.year_month)?,
         amount: raw.amount,
         alert_threshold: raw.alert_threshold,
     })

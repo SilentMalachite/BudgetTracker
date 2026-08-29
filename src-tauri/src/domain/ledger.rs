@@ -179,7 +179,7 @@ pub struct MonthlySummary {
 }
 
 /// Aggregate a slice of transactions into income / expense / net for a given
-/// (year, month). Transfer rows are silently excluded (Phase 2 invariant).
+/// (year, month). Transfer rows are silently excluded.
 pub fn aggregate_monthly(txs: &[Transaction], year: i32, month: u32) -> MonthlySummary {
     let mut income: i64 = 0;
     let mut expense: i64 = 0;

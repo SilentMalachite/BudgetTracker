@@ -1,12 +1,11 @@
 use budget_tracker_lib::commands::budgets::{set_budget_for_conn, SetBudgetInput};
 use budget_tracker_lib::domain::account::AccountKind;
-use budget_tracker_lib::domain::budget::{parse_year_month, RawSetBudgetInput};
+use budget_tracker_lib::domain::budget::RawSetBudgetInput;
 use budget_tracker_lib::domain::category::CategoryType;
 use budget_tracker_lib::domain::ledger::TxType;
+use budget_tracker_lib::domain::YearMonth;
 use budget_tracker_lib::infra::migrations;
-use budget_tracker_lib::infra::repo::{
-    account_repo, budget_repo, category_repo, transaction_repo,
-};
+use budget_tracker_lib::infra::repo::{account_repo, budget_repo, category_repo, transaction_repo};
 use chrono::NaiveDate;
 use rusqlite::Connection;
 
@@ -65,7 +64,7 @@ fn list_statuses_returns_active_expense_categories_even_without_budget() {
 
     let statuses = budget_repo::list_statuses(
         &conn,
-        parse_year_month("2026-05").unwrap(),
+        YearMonth::parse_key("2026-05").unwrap(),
         NaiveDate::from_ymd_opt(2026, 5, 25).unwrap(),
     )
     .unwrap();
@@ -153,7 +152,7 @@ fn list_statuses_counts_only_expense_spending_inside_selected_month() {
 
     let statuses = budget_repo::list_statuses(
         &conn,
-        parse_year_month("2026-05").unwrap(),
+        YearMonth::parse_key("2026-05").unwrap(),
         NaiveDate::from_ymd_opt(2026, 5, 25).unwrap(),
     )
     .unwrap();

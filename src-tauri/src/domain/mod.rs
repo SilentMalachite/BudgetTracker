@@ -5,3 +5,5 @@ pub mod report;
 pub mod seed;
 pub mod balance;
 pub mod budget;
+pub mod year_month;
+pub use year_month::YearMonth;

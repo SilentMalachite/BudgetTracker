@@ -69,12 +69,11 @@
                  │
 ┌────────────────▼───────────────────────────┐
 │  SQLite (SQLCipher で暗号化)                │
-│  保存先 (Tauri path API で OS 別解決):       │
-│  - macOS: ~/Library/Application Support/    │
-│            jp.budget-tracker/data.db        │
-│  - Windows: %APPDATA%\BudgetTracker\        │
-│              data.db                         │
+│  保存先: Tauri app_data_dir()/data.db       │
+│  (identifier: jp.budget-tracker.app)        │
+│  例: .../jp.budget-tracker.app/data.db      │
 │  暗号化キーは OS Keychain に保存             │
+│  (全 OS: jp.budget-tracker / db_key)        │
 └────────────────────────────────────────────┘
 ```
 
@@ -267,7 +266,7 @@ CREATE TABLE app_meta (
 
 - **CRUD**: 追加・編集・削除・フィルタ（種類/カテゴリ/口座/月/フリーワード）
 - **振替の扱い**: type='transfer' のとき category は NULL、counter_account_id を必須化
-- **既存HTML機能の継承**: Excel/JSONエクスポート・インポート、上書き/追記モード、エラー行の事前検出
+- **既存HTML機能の継承**: JSON エクスポート/インポート（上書き/追記、検証エラーでロールバック）は現行。Excel インポート/エクスポートは Phase 4 では未実装で、Phase 6 以降に先送りする。スナップショットの `schema_version` は **backup format version 1** であり、`app_meta.schema_version` ではない。
 
 ### 5.3 予算管理
 
@@ -291,8 +290,11 @@ CREATE TABLE app_meta (
   - `projected` = 現在の日割りペースを月末まで延長した推定額（早期警告用）
 - **アラート**: `percent >= alert_threshold` で UI 上にバッジ表示
 - **適用期間**: `starts_on`/`ends_on` で予算改定の履歴管理が可能
+- Phase 4 の月別 UI はカテゴリ×月の1行（`starts_on = YYYY-MM-01`, `ends_on` 未使用）。lookup は `period = 'monthly' AND starts_on = 選択月の1日`。`ends_on` NULL を翌月へ継続するルールは未実装（将来）。
 
 ### 5.4 定期取引
+
+定期取引の展開と Recurring ルートは **Phase 5**。
 
 - **展開タイミング**: アプリ起動時に Rust 側で `expand_due_recurring()` を実行
   1. `recurring_rules WHERE active=1` を取得
@@ -327,6 +329,15 @@ CREATE TABLE app_meta (
 
 ### 5.6 分析レポート
 
+4タブ UI（月次 / 年次 / カテゴリ別 / トレンド）と Recurring / Reports ルートは **Phase 5**。
+
+Phase 4 時点で実装済みの集計コマンド:
+
+- `monthly_summary(year, month)` — 指定月の収入 / 支出 / 差額（振替は除外）
+- `monthly_series(months)` — 当月を含む直近 N ヶ月（歯抜け月は 0 埋め）
+
+Phase 5 で追加する4タブ:
+
 ```
 タブ: [月次] [年次] [カテゴリ別] [トレンド]
 
@@ -348,8 +359,8 @@ CREATE TABLE app_meta (
 - 移動平均 (3ヶ月)
 ```
 
-- **集計クエリは Rust 側**: `report_monthly(year, month)` / `report_yearly(year)` / `report_by_category(range)` / `report_net_worth_series(range)` の4コマンド
-- **エクスポート**: 既存と同様 Excel/JSON。PDF出力は MVP 対象外
+- **集計クエリは Rust 側**: 現行は `monthly_summary` / `monthly_series`。Phase 5 で `report_yearly(year)` / `report_by_category(range)` / `report_net_worth_series(range)` を追加する
+- **エクスポート**: JSON は現行。Excel は Phase 6 以降。PDF出力は MVP 対象外
 
 ## 6. セキュリティ
 
@@ -360,12 +371,14 @@ CREATE TABLE app_meta (
   └─→ OS の安全な乱数生成器で 32バイト鍵生成
        └─→ keyring crate で OS Keychain に保存
             ├ macOS:  Keychain (jp.budget-tracker / db_key)
-            └ Windows: Credential Manager (BudgetTracker/db_key)
+            └ Windows: Credential Manager (jp.budget-tracker / db_key)
        └─→ SQLCipher で data.db を AES-256 で初期化
 
 2回目以降
   └─→ keyring から鍵取得 → SQLite ATTACH 時に PRAGMA key で復号
 ```
+
+保存先は Tauri の `app_data_dir()/data.db`（`identifier` = `jp.budget-tracker.app` により `.../jp.budget-tracker.app/data.db`）。Keychain サービス名は既存鍵を孤児化するためリネームしない。
 
 ### 6.2 セキュリティ実装
 
@@ -394,11 +407,11 @@ CREATE TABLE app_meta (
 | Rust unit | `cargo test` | domain/ の純粋関数 (予算評価、定期展開ロジック、レポート集計) |
 | Rust 統合 | `cargo test` + `rusqlite` メモリDB | commands/ + DB マイグレーション |
 | Svelte unit | Vitest + @testing-library/svelte | ストア、ユーティリティ、コンポーネント |
-| E2E | Playwright (Tauri WebView 経由) | 主要ユーザーフロー (取引追加→予算反映→レポート) |
+| E2E | Playwright（Vite `pnpm dev` + Tauri invoke mock）。`tauri-driver` による Tauri WebView E2E は Phase 6 | 主要ユーザーフローのスモーク (取引追加→予算反映 等) |
 
 - **重点**: domain レイヤーの Rust ユニットテスト。金額計算と日付ロジックは間違えると致命的なので、property-based test (`proptest`) で境界をカバー
 - **TDD で進める**: 各機能の Rust domain ロジックは「先にテスト → 実装」サイクル
-- **CI**: PR 時に `cargo clippy` `cargo test` `pnpm test` `svelte-check` をすべて緑にする
+- **CI**: PR 時に `cargo clippy` `cargo test` `pnpm test` `svelte-check` と Playwright スモークをすべて緑にする。`release.yml` は Phase 6
 
 ## 9. UI/UX 方針
 
@@ -441,3 +454,4 @@ CREATE TABLE app_meta (
 ## 改訂履歴
 
 - 2026-05-24: 初版作成（ユーザーとのブレインストーミングセッションを経て確定）
+- 2026-08-29: Phase 4 レビューに合わせ、未実装機能とパス/鍵の現行実装を明記
