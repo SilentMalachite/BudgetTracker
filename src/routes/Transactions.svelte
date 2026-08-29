@@ -19,10 +19,11 @@
     type Transaction,
     type TxType,
   } from '../lib/api/transactions';
+  import { optionsWithCurrent } from '../lib/utils/selectOptions';
   import { isoToday } from '../lib/utils/yearMonth';
 
   const txStore = createTransactionsStore({}, 50);
-  const catStore = createCategoriesStore({ include_archived: false });
+  const catStore = createCategoriesStore({ include_archived: true });
   const accStore = createAccountsStore(true);
 
   onDestroy(() => {
@@ -191,9 +192,11 @@
   const categoryOptions = $derived(
     formType === 'transfer'
       ? []
-      : catStore.items
-          .filter((category) => category.type === formType && !category.archived_at)
-          .map((category) => ({ value: String(category.id), label: category.name })),
+      : optionsWithCurrent(
+          catStore.items.filter((category) => category.type === formType),
+          editing ? formCategory : '',
+          false,
+        ),
   );
 
   const visibleAccounts = $derived(accStore.items.filter((account) => !account.archived_at));
@@ -214,27 +217,29 @@
   );
 
   const accountOptions = $derived(
-    visibleAccounts.map((account) => ({ value: String(account.id), label: account.name })),
+    optionsWithCurrent(accStore.items, editing ? formAccount : '', false),
   );
 
   const counterAccountOptions = $derived(
-    visibleAccounts
-      .filter((account) => String(account.id) !== formAccount)
-      .map((account) => ({ value: String(account.id), label: account.name })),
+    optionsWithCurrent(
+      accStore.items.filter((account) => String(account.id) !== formAccount),
+      editing ? formCounterAccount : '',
+      false,
+    ),
   );
 
   $effect(() => {
-    if (!modalOpen) return;
-    // Keep category in sync when type switches between income/expense.
+    if (!modalOpen || editing) return;
     if (formType !== 'transfer' && !categoryOptions.some((option) => option.value === formCategory)) {
       formCategory = firstCategoryFor(formType);
     }
-    // Keep account selections valid as the visible-accounts list changes.
     if (!accountOptions.some((option) => option.value === formAccount)) {
       formAccount = accountOptions[0]?.value ?? '';
     }
-    if (formType === 'transfer' &&
-        !counterAccountOptions.some((option) => option.value === formCounterAccount)) {
+    if (
+      formType === 'transfer' &&
+      !counterAccountOptions.some((option) => option.value === formCounterAccount)
+    ) {
       formCounterAccount = counterAccountOptions[0]?.value ?? '';
     }
   });
