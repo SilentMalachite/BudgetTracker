@@ -439,7 +439,8 @@ Phase 5 で追加する4タブ:
 
 | リスク | 影響 | 対応 |
 |---|---|---|
-| SQLCipher のビルド失敗 (Windows特に) | ビルド不可 | `bundled-sqlcipher-vendored-openssl` feature を使う / トラブル時は無暗号フォールバック検討 |
+| SQLCipher のビルド失敗 (Windows特に) | ビルド不可 | `bundled-sqlcipher-vendored-openssl` feature を使う。平文 SQLite へのフォールバックはしない（接続時は常に `PRAGMA key`） |
+| 復号失敗・鍵欠落/破損 | data.db が開けない | Recovery UI を表示。JSON インポートまたは空データベース開始で復元する。元の `data.db` は新しいファイルのインポート成功後にのみ quarantine する。鍵なし/平文でのオープンはしない |
 | keyring が一部Linux環境で不安定 | 鍵取得失敗 | Linux は MVP対象外。macOS/Windowsの公式サポートのみとする |
 | 大量データ時の集計性能 | UI ラグ | Rust 側で SQL に集計させる方針なので一般用途では問題なし。10万件超でベンチ取って index 見直し |
 | Chart.js の WebView 描画パフォーマンス | グラフ重い | データポイントを年単位で 1000 以下に保つ (集計済みデータのみ渡す) |
@@ -455,3 +456,4 @@ Phase 5 で追加する4タブ:
 
 - 2026-05-24: 初版作成（ユーザーとのブレインストーミングセッションを経て確定）
 - 2026-08-29: Phase 4 レビューに合わせ、未実装機能とパス/鍵の現行実装を明記
+- 2026-08-29: §11 から SQLCipher 平文フォールバックを削除し、復号/鍵不一致時の Recovery 手順を明記

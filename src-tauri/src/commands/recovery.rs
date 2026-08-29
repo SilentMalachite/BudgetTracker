@@ -44,10 +44,11 @@ fn lock_inner(inner: &Mutex<AppInner>) -> AppResult<std::sync::MutexGuard<'_, Ap
 fn obtain_recovery_key(keys: &dyn KeyStore) -> AppResult<DbKey> {
     match keys.get() {
         Ok(Some(key)) => Ok(key),
-        Ok(None) | Err(_) => {
+        Ok(None) | Err(AppError::Corrupt(_)) => {
             keys.delete()?;
             keys.create()
         }
+        Err(err) => Err(err),
     }
 }
 
@@ -180,7 +181,74 @@ pub fn recover_start_empty_cmd(state: State<'_, AppState>) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infra::keychain::KEY_LEN;
     use tempfile::TempDir;
+
+    struct RecordingKeys {
+        get: fn() -> AppResult<Option<DbKey>>,
+        create_calls: Mutex<u32>,
+        delete_calls: Mutex<u32>,
+    }
+
+    impl KeyStore for RecordingKeys {
+        fn get(&self) -> AppResult<Option<DbKey>> {
+            (self.get)()
+        }
+        fn create(&self) -> AppResult<DbKey> {
+            *self.create_calls.lock().unwrap() += 1;
+            Ok([9u8; KEY_LEN])
+        }
+        fn delete(&self) -> AppResult<()> {
+            *self.delete_calls.lock().unwrap() += 1;
+            Ok(())
+        }
+    }
+
+    fn keychain_error() -> AppError {
+        AppError::Keychain(keyring::Error::Invalid(
+            "target".into(),
+            "transient".into(),
+        ))
+    }
+
+    #[test]
+    fn obtain_recovery_key_does_not_replace_on_keychain_error() {
+        let keys = RecordingKeys {
+            get: || Err(keychain_error()),
+            create_calls: Mutex::new(0),
+            delete_calls: Mutex::new(0),
+        };
+        let err = obtain_recovery_key(&keys).unwrap_err();
+        assert!(matches!(err, AppError::Keychain(_)));
+        assert_eq!(*keys.create_calls.lock().unwrap(), 0);
+        assert_eq!(*keys.delete_calls.lock().unwrap(), 0);
+    }
+
+    #[test]
+    fn obtain_recovery_key_mints_when_missing() {
+        let keys = RecordingKeys {
+            get: || Ok(None),
+            create_calls: Mutex::new(0),
+            delete_calls: Mutex::new(0),
+        };
+        let key = obtain_recovery_key(&keys).unwrap();
+        assert_eq!(key, [9u8; KEY_LEN]);
+        assert_eq!(*keys.delete_calls.lock().unwrap(), 1);
+        assert_eq!(*keys.create_calls.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn obtain_recovery_key_replaces_corrupt_entry() {
+        let keys = RecordingKeys {
+            get: || Err(AppError::Corrupt("wrong length".into())),
+            create_calls: Mutex::new(0),
+            delete_calls: Mutex::new(0),
+        };
+        let key = obtain_recovery_key(&keys).unwrap();
+        assert_eq!(key, [9u8; KEY_LEN]);
+        assert_eq!(*keys.delete_calls.lock().unwrap(), 1);
+        assert_eq!(*keys.create_calls.lock().unwrap(), 1);
+    }
 
     #[test]
     fn quarantine_name_uses_utc_stamp() {
