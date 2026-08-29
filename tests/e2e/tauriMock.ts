@@ -10,7 +10,7 @@ export async function installReadyBootMock(page: Page): Promise<void> {
       }
       // Dashboard mounts on `/` and `/` is the smoke landing page.
       if (command === 'list_balances') {
-        return [];
+        return { accounts: [], total_assets: 0 };
       }
       if (command === 'list_budget_statuses' || command === 'list_top_budget_statuses') {
         return [];

@@ -122,9 +122,10 @@ pub fn parse_year_month(raw: &str) -> AppResult<YearMonth> {
 }
 
 pub fn month_bounds(year_month: YearMonth) -> AppResult<MonthBounds> {
-    let starts_on = NaiveDate::from_ymd_opt(year_month.year, year_month.month, 1).ok_or_else(|| {
-        AppError::InvalidArgument(format!("invalid year_month '{}'", year_month.key()))
-    })?;
+    let starts_on =
+        NaiveDate::from_ymd_opt(year_month.year, year_month.month, 1).ok_or_else(|| {
+            AppError::InvalidArgument(format!("invalid year_month '{}'", year_month.key()))
+        })?;
     let (next_year, next_month) = if year_month.month == 12 {
         (year_month.year + 1, 1)
     } else {
@@ -176,7 +177,10 @@ pub fn evaluate_status(
 ) -> AppResult<BudgetStatus> {
     let bounds = month_bounds(year_month)?;
     let percent = if input.budgeted > 0 {
-        input.spent.saturating_mul(100).saturating_div(input.budgeted)
+        input
+            .spent
+            .saturating_mul(100)
+            .saturating_div(input.budgeted)
     } else if input.spent > 0 {
         200
     } else {
@@ -219,6 +223,22 @@ pub fn evaluate_status(
         threshold_reached: input.budgeted > 0 && percent >= input.alert_threshold,
         projected_over_budget: input.budgeted > 0 && projected > input.budgeted,
     })
+}
+
+/// Rank budgeted statuses for the dashboard widget.
+///
+/// Drops rows without a budget, then orders by percent descending,
+/// projected-over-budget descending, and category name ascending.
+pub fn select_top_statuses(mut items: Vec<BudgetStatus>, n: usize) -> Vec<BudgetStatus> {
+    items.retain(|status| status.budget_id.is_some());
+    items.sort_by(|a, b| {
+        b.percent
+            .cmp(&a.percent)
+            .then(b.projected_over_budget.cmp(&a.projected_over_budget))
+            .then(a.category_name.cmp(&b.category_name))
+    });
+    items.truncate(n);
+    items
 }
 
 #[cfg(test)]
@@ -390,6 +410,48 @@ mod tests {
         assert_eq!(past.projected, 12_000);
         assert_eq!(future.days_left, 30);
         assert_eq!(future.projected, 0);
+    }
+
+    fn status_for_rank(
+        category_name: &str,
+        percent: i64,
+        projected_over_budget: bool,
+        budget_id: Option<i64>,
+    ) -> BudgetStatus {
+        BudgetStatus {
+            category_id: budget_id.unwrap_or(0),
+            category_name: category_name.into(),
+            category_color: None,
+            category_icon: None,
+            budget_id,
+            budgeted: 10_000,
+            spent: 0,
+            percent,
+            progress_percent: percent.clamp(0, 100),
+            days_left: 0,
+            projected: 0,
+            alert_threshold: 80,
+            threshold_reached: false,
+            projected_over_budget,
+        }
+    }
+
+    #[test]
+    fn select_top_statuses_orders_by_percent_then_projected_then_name() {
+        let items = vec![
+            status_for_rank("b", 80, true, Some(1)),
+            status_for_rank("a", 80, false, Some(2)),
+            status_for_rank("c", 90, false, Some(3)),
+        ];
+
+        let top = select_top_statuses(items, 2);
+
+        assert_eq!(
+            top.iter()
+                .map(|status| status.category_name.as_str())
+                .collect::<Vec<_>>(),
+            ["c", "b"]
+        );
     }
 
     mod prop_tests {

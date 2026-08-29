@@ -12,7 +12,7 @@
   import type { UnlistenFn } from '@tauri-apps/api/event';
   import Card from '../lib/components/Card.svelte';
   import EmptyState from '../lib/components/EmptyState.svelte';
-  import { listBudgetStatuses, type BudgetStatus } from '../lib/api/budgets';
+  import { listTopBudgetStatuses, type BudgetStatus } from '../lib/api/budgets';
   import { onDataChanged } from '../lib/api/events';
   import { monthlySeries, monthlySummary, type MonthlyBucket, type MonthlySummary } from '../lib/api/reports';
   import { listTransactions, type Transaction } from '../lib/api/transactions';
@@ -32,7 +32,7 @@
   let summary = $state<MonthlySummary | null>(null);
   let series = $state<MonthlyBucket[]>([]);
   let recent = $state<Transaction[]>([]);
-  let budgetStatuses = $state<BudgetStatus[]>([]);
+  let topBudgetStatuses = $state<BudgetStatus[]>([]);
   let error = $state<string | null>(null);
   let canvas = $state<HTMLCanvasElement | null>(null);
   let chart: Chart<'bar'> | null = null;
@@ -50,13 +50,13 @@
         monthlySummary(currentYear, currentMonth),
         monthlySeries(12),
         listTransactions({}, 0, 10),
-        listBudgetStatuses(currentYearMonth), // replaced in Task 13 with listTopBudgetStatuses
+        listTopBudgetStatuses(currentYearMonth, 3),
       ]);
       if (disposed || id !== reloadId) return;
       summary = nextSummary;
       series = nextSeries;
       recent = nextRecent.items;
-      budgetStatuses = nextBudgets;
+      topBudgetStatuses = nextBudgets;
       drawChart();
     } catch (e) {
       if (disposed || id !== reloadId) return;
@@ -64,7 +64,7 @@
       summary = null;
       series = [];
       recent = [];
-      budgetStatuses = [];
+      topBudgetStatuses = [];
       drawChart();
     }
   }
@@ -133,19 +133,6 @@
     void catStore.dispose();
     void balancesStore.dispose();
   });
-
-  const topBudgetStatuses = $derived(
-    [...budgetStatuses]
-      .filter((status) => status.budget_id != null)
-      .sort((a: BudgetStatus, b: BudgetStatus) => {
-        const percentOrder = b.percent - a.percent;
-        if (percentOrder !== 0) return percentOrder;
-        const projectedOrder = Number(b.projected_over_budget) - Number(a.projected_over_budget);
-        if (projectedOrder !== 0) return projectedOrder;
-        return a.category_name.localeCompare(b.category_name, 'ja');
-      })
-      .slice(0, 3),
-  );
 </script>
 
 <section data-testid="page-dashboard">

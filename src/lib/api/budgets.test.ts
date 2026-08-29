@@ -5,7 +5,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
-import { listBudgetStatuses, setBudget } from './budgets';
+import { listBudgetStatuses, listTopBudgetStatuses, setBudget } from './budgets';
 
 describe('budgets api', () => {
   beforeEach(() => invokeMock.mockReset());
@@ -17,6 +17,17 @@ describe('budgets api', () => {
 
     expect(invokeMock).toHaveBeenCalledWith('list_budget_statuses', {
       yearMonth: '2026-05',
+    });
+  });
+
+  it('passes yearMonth and limit through to list_top_budget_statuses', async () => {
+    invokeMock.mockResolvedValueOnce([]);
+
+    await listTopBudgetStatuses('2026-05', 3);
+
+    expect(invokeMock).toHaveBeenCalledWith('list_top_budget_statuses', {
+      yearMonth: '2026-05',
+      limit: 3,
     });
   });
 

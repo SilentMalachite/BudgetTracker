@@ -127,8 +127,16 @@ test('transfer moves money between accounts without changing total assets', asyn
               total: sorted.length,
             };
           }
-          case 'list_balances':
-            return balances();
+          case 'list_balances': {
+            const accounts = balances();
+            let total_assets = 0;
+            for (const account of accounts) {
+              if (account.archived_at == null) total_assets += account.balance;
+            }
+            return { accounts, total_assets };
+          }
+          case 'list_top_budget_statuses':
+            return [];
           case 'monthly_summary': {
             const inc = state.transactions
               .filter((t) => t.type === 'income')
@@ -263,6 +271,8 @@ test('accounts page surfaces balance loading errors', async ({ page }) => {
             return { items: [], total: 0 };
           case 'list_balances':
             throw new Error('balance boom');
+          case 'list_top_budget_statuses':
+            return [];
           case 'monthly_summary':
             return { income: 0, expense: 0, net: 0, by_category: [] };
           case 'monthly_series':

@@ -35,6 +35,19 @@ pub fn compute_balance(initial_balance: i64, txs: &[Transaction], account_id: i6
     balance
 }
 
+/// Sum balances of non-archived accounts using saturating integer yen.
+///
+/// `archived` is true when `archived_at` is present. Archived rows are
+/// skipped so a hidden account cannot change total assets.
+pub fn total_assets<I>(rows: I) -> i64
+where
+    I: IntoIterator<Item = (bool, i64)>,
+{
+    rows.into_iter()
+        .filter(|(archived, _)| !*archived)
+        .fold(0i64, |sum, (_, bal)| sum.saturating_add(bal))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -47,7 +60,11 @@ mod tests {
             amount,
             account_id,
             counter_account_id: counter,
-            category_id: if matches!(t, TxType::Transfer) { None } else { Some(1) },
+            category_id: if matches!(t, TxType::Transfer) {
+                None
+            } else {
+                Some(1)
+            },
             description: String::new(),
             recurring_id: None,
             created_at: "2026-05-25T00:00:00Z".into(),
@@ -97,6 +114,12 @@ mod tests {
             tx(TxType::Transfer, 100, 99, Some(98)),
         ];
         assert_eq!(compute_balance(1234, &txs, 1), 1234);
+    }
+
+    #[test]
+    fn total_assets_sums_non_archived_only() {
+        let rows = [(false, 100_000_i64), (true, 40_000)];
+        assert_eq!(total_assets(rows), 100_000);
     }
 }
 

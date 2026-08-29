@@ -67,6 +67,24 @@ pub fn list_budget_statuses(
 }
 
 #[tauri::command]
+pub fn list_top_budget_statuses(
+    state: State<'_, AppState>,
+    year_month: String,
+    limit: u32,
+) -> AppResult<Vec<BudgetStatus>> {
+    if !(1..=10).contains(&limit) {
+        return Err(AppError::InvalidArgument(format!(
+            "limit must be 1..=10, got {limit}"
+        )));
+    }
+    let today = chrono::Local::now().date_naive();
+    state.with_conn(|conn| {
+        let all = list_budget_statuses_for_conn(conn, &year_month, today)?;
+        Ok(budget::select_top_statuses(all, limit as usize))
+    })
+}
+
+#[tauri::command]
 pub fn set_budget(
     app: AppHandle,
     state: State<'_, AppState>,

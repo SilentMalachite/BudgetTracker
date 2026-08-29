@@ -62,6 +62,7 @@ pub fn run() {
             commands::reports::monthly_summary,
             commands::reports::monthly_series,
             commands::budgets::list_budget_statuses,
+            commands::budgets::list_top_budget_statuses,
             commands::budgets::set_budget,
             commands::backup::export_json,
             commands::backup::import_json,

@@ -11,6 +11,11 @@ export type AccountBalance = {
   display_order: number;
 };
 
-export function listBalances(): Promise<AccountBalance[]> {
-  return invoke<AccountBalance[]>('list_balances');
+export type BalanceList = {
+  accounts: AccountBalance[];
+  total_assets: number;
+};
+
+export function listBalances(): Promise<BalanceList> {
+  return invoke<BalanceList>('list_balances');
 }

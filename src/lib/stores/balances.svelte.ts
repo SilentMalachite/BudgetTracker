@@ -15,6 +15,7 @@ export function createBalancesStore(): BalancesStore {
   let items = $state<AccountBalance[]>([]);
   let loading = $state(false);
   let error = $state<string | null>(null);
+  let totalAssets = $state(0);
   let unlisten: UnlistenFn | null = null;
   let disposed = false;
   let requestId = 0;
@@ -26,7 +27,8 @@ export function createBalancesStore(): BalancesStore {
     try {
       const res = await listBalances();
       if (id !== requestId) return;
-      items = res;
+      items = res.accounts;
+      totalAssets = res.total_assets;
     } catch (e) {
       if (id !== requestId) return;
       error = e instanceof Error ? e.message : String(e);
@@ -59,9 +61,7 @@ export function createBalancesStore(): BalancesStore {
       return error;
     },
     get totalAssets() {
-      return items
-        .filter((row) => row.archived_at == null)
-        .reduce((sum, row) => sum + row.balance, 0);
+      return totalAssets;
     },
     load,
     async dispose() {

@@ -172,8 +172,14 @@ test('budget warning appears on budgets page and dashboard', async ({ page }) =>
               return args.includeArchived
                 ? state.accounts
                 : state.accounts.filter((account: any) => account.archived_at == null);
-            case 'list_balances':
-              return balances();
+            case 'list_balances': {
+              const accounts = balances();
+              let total_assets = 0;
+              for (const account of accounts) {
+                if (account.archived_at == null) total_assets += account.balance;
+              }
+              return { accounts, total_assets };
+            }
             case 'list_transactions': {
               const sorted = [...state.transactions].sort((a, b) => b.id - a.id);
               return {
@@ -183,6 +189,10 @@ test('budget warning appears on budgets page and dashboard', async ({ page }) =>
             }
             case 'list_budget_statuses':
               return budgetStatuses(args.yearMonth);
+            case 'list_top_budget_statuses':
+              return budgetStatuses(args.yearMonth)
+                .filter((status) => status.budget_id != null)
+                .slice(0, args.limit ?? 3);
             case 'set_budget': {
               const startsOn = `${args.input.year_month}-01`;
               let budget = state.budgets.find(

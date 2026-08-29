@@ -38,6 +38,10 @@ export function listBudgetStatuses(yearMonth: string): Promise<BudgetStatus[]> {
   return invoke<BudgetStatus[]>('list_budget_statuses', { yearMonth });
 }
 
+export function listTopBudgetStatuses(yearMonth: string, limit: number): Promise<BudgetStatus[]> {
+  return invoke<BudgetStatus[]>('list_top_budget_statuses', { yearMonth, limit });
+}
+
 export function setBudget(input: SetBudgetInput): Promise<Budget> {
   return invoke<Budget>('set_budget', { input });
 }
