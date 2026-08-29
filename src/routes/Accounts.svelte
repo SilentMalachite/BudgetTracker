@@ -170,7 +170,27 @@
                 <strong>{account.name}</strong>
                 <small>{ACCOUNT_KIND_LABELS[account.kind]}</small>
               </div>
-              <span class="balance"><strong>{yen.format(account.initial_balance)}</strong></span>
+              {#if balances.error}
+                <span class="balance unavailable" data-testid={`account-balance-${account.id}`}>
+                  <strong>取得できません</strong>
+                </span>
+              {:else if balances.loading}
+                <span class="balance" data-testid={`account-balance-${account.id}`}>
+                  <small>…</small>
+                </span>
+              {:else if !balanceById.has(account.id)}
+                <span class="balance unavailable" data-testid={`account-balance-${account.id}`}>
+                  <strong>取得できません</strong>
+                </span>
+              {:else}
+                {@const computed = balanceById.get(account.id) ?? 0}
+                <span class="balance" data-testid={`account-balance-${account.id}`}>
+                  <strong>{yen.format(computed)}</strong>
+                  {#if computed !== account.initial_balance}
+                    <small>初期 {yen.format(account.initial_balance)}</small>
+                  {/if}
+                </span>
+              {/if}
               <Button variant="ghost" onclick={() => toggleArchive(account)}>
                 {#snippet children()}復元{/snippet}
               </Button>
