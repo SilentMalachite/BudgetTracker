@@ -135,6 +135,44 @@ fn filter_by_search_and_type() {
 }
 
 #[test]
+fn search_treats_percent_as_literal() {
+    let (conn, acc, cat) = seeded_db();
+    transaction_repo::insert(
+        &conn,
+        &transaction_repo::InsertInput {
+            occurred_on: "2026-05-10",
+            type_: TxType::Expense,
+            amount: 100,
+            account_id: acc,
+            category_id: cat,
+            description: "100%オフ",
+            now: NOW,
+        },
+    )
+    .unwrap();
+    transaction_repo::insert(
+        &conn,
+        &transaction_repo::InsertInput {
+            occurred_on: "2026-05-11",
+            type_: TxType::Expense,
+            amount: 100,
+            account_id: acc,
+            category_id: cat,
+            description: "ランチ",
+            now: NOW,
+        },
+    )
+    .unwrap();
+    let filter = transaction_repo::ListFilter {
+        search: Some("%".into()),
+        ..Default::default()
+    };
+    let (items, total) = transaction_repo::list(&conn, &filter, 0, 50).unwrap();
+    assert_eq!(total, 1);
+    assert_eq!(items[0].description, "100%オフ");
+}
+
+#[test]
 fn list_includes_transfer_rows_after_slice_02() {
     // Phase 3 Slice 02 removed the `type IN ('income','expense')` clamp from
     // `transaction_repo::build_where` so the Transactions page can list transfers

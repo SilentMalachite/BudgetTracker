@@ -13,6 +13,12 @@ pub struct ListFilter {
     pub search: Option<String>,
 }
 
+fn escape_like(raw: &str) -> String {
+    raw.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
 fn row_to_tx(row: &rusqlite::Row<'_>) -> rusqlite::Result<Transaction> {
     let type_raw: String = row.get("type")?;
     let type_ = match type_raw.as_str() {
@@ -68,8 +74,8 @@ fn build_where(filter: &ListFilter) -> (String, Vec<Box<dyn ToSql>>) {
     }
     if let Some(q) = &filter.search {
         if !q.is_empty() {
-            clauses.push("description LIKE ?".into());
-            binds.push(Box::new(format!("%{q}%")));
+            clauses.push("description LIKE ? ESCAPE '\\'".into());
+            binds.push(Box::new(format!("%{}%", escape_like(q))));
         }
     }
     let sql = if clauses.is_empty() {
@@ -102,10 +108,13 @@ pub fn list(
                 category_id, description, recurring_id, created_at, updated_at
            FROM transactions{where_sql}
           ORDER BY occurred_on DESC, id DESC
-          LIMIT {limit} OFFSET {offset}",
+          LIMIT ? OFFSET ?"
     );
+    let mut binds_with_page = binds;
+    binds_with_page.push(Box::new(limit as i64));
+    binds_with_page.push(Box::new(offset as i64));
     let mut stmt = conn.prepare(&list_sql)?;
-    let params_refs: Vec<&dyn ToSql> = binds.iter().map(|b| b.as_ref()).collect();
+    let params_refs: Vec<&dyn ToSql> = binds_with_page.iter().map(|b| b.as_ref()).collect();
     let items: Vec<Transaction> = stmt
         .query_map(params_refs.as_slice(), row_to_tx)?
         .collect::<rusqlite::Result<_>>()?;

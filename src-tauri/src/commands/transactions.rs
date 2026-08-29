@@ -4,12 +4,21 @@ use tauri::{AppHandle, State};
 
 use crate::commands::meta::AppState;
 use crate::domain::ledger::{self, Transaction, TxType};
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::infra::events::{emit_changed, ChangedDomain};
 use crate::infra::repo::transaction_repo;
 
 fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+pub fn parse_page_size(page_size: u32) -> AppResult<u32> {
+    if !(1..=200).contains(&page_size) {
+        return Err(AppError::InvalidArgument(format!(
+            "page_size must be 1..=200, got {page_size}"
+        )));
+    }
+    Ok(page_size)
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -36,6 +45,7 @@ pub fn list_transactions(
     page: u32,
     page_size: u32,
 ) -> AppResult<ListTransactionResult> {
+    let page_size = parse_page_size(page_size)?;
     let type_ = filter.type_.as_deref().map(TxType::parse).transpose()?;
     let repo_filter = transaction_repo::ListFilter {
         from: filter.from,
@@ -286,5 +296,20 @@ mod tests {
         .unwrap();
         assert_eq!(input.amount, 30_000);
         assert_eq!(input.description, "");
+    }
+
+    #[test]
+    fn parse_page_size_rejects_zero() {
+        assert!(parse_page_size(0).is_err());
+    }
+
+    #[test]
+    fn parse_page_size_rejects_over_200() {
+        assert!(parse_page_size(201).is_err());
+    }
+
+    #[test]
+    fn parse_page_size_accepts_50() {
+        assert_eq!(parse_page_size(50).unwrap(), 50);
     }
 }
