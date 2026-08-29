@@ -70,7 +70,10 @@ fn existing_db_and_wrong_key_is_decrypt_failed_and_does_not_create_key() {
     let wrong = [2u8; KEY_LEN];
     {
         let path = dir.path().join(DB_FILENAME);
-        let conn = budget_tracker_lib::infra::db::open_encrypted(&path, &right).unwrap();
+        let mut conn = budget_tracker_lib::infra::db::open_encrypted(&path, &right).unwrap();
+        // SQLCipher can treat an empty file as a fresh DB. Apply migrations
+        // under the right key so reopening it with another key must decrypt.
+        budget_tracker_lib::infra::migrations::run(&mut conn).unwrap();
         drop(conn);
     }
     let keys = MemKeys {
