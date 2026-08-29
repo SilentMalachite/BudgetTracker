@@ -112,6 +112,8 @@ test('happy path: add transaction and see dashboard total update', async ({ page
               return state.accounts;
             case 'list_balances':
               return { accounts: [], total_assets: 0 };
+            case 'list_budget_statuses':
+              return [];
             case 'list_top_budget_statuses':
               return [];
             case 'list_transactions': {

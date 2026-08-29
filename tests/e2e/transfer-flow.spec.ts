@@ -135,6 +135,8 @@ test('transfer moves money between accounts without changing total assets', asyn
             }
             return { accounts, total_assets };
           }
+          case 'list_budget_statuses':
+            return [];
           case 'list_top_budget_statuses':
             return [];
           case 'monthly_summary': {
@@ -271,6 +273,8 @@ test('accounts page surfaces balance loading errors', async ({ page }) => {
             return { items: [], total: 0 };
           case 'list_balances':
             throw new Error('balance boom');
+          case 'list_budget_statuses':
+            return [];
           case 'list_top_budget_statuses':
             return [];
           case 'monthly_summary':

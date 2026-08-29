@@ -74,43 +74,83 @@ test('budget warning appears on budgets page and dashboard', async ({ page }) =>
         }
       }
 
-      function budgetStatuses(yearMonth: string) {
-        return state.categories
-          .filter((category: any) => category.type === 'expense' && category.archived_at == null)
-          .map((category: any) => {
-            const startsOn = `${yearMonth}-01`;
-            const budget = state.budgets.find(
-              (item) => item.category_id === category.id && item.starts_on === startsOn,
-            );
-            const spent = state.transactions
-              .filter(
-                (tx) =>
-                  tx.type === 'expense' &&
-                  tx.category_id === category.id &&
-                  tx.occurred_on.startsWith(yearMonth),
-              )
-              .reduce((sum, tx) => sum + tx.amount, 0);
-            const budgeted = budget?.amount ?? 0;
-            const percent = budgeted > 0 ? Math.floor((spent * 100) / budgeted) : spent > 0 ? 200 : 0;
-            const progress = Math.min(percent, 100);
-            const threshold = budget?.alert_threshold ?? 80;
-            return {
-              category_id: category.id,
-              category_name: category.name,
-              category_color: category.color,
-              category_icon: category.icon,
-              budget_id: budget?.id ?? null,
-              budgeted,
-              spent,
-              percent,
-              progress_percent: progress,
-              days_left: 0,
-              projected: spent,
-              alert_threshold: threshold,
-              threshold_reached: budgeted > 0 && percent >= threshold,
-              projected_over_budget: false,
-            };
-          });
+      type BudgetStatusFixture = {
+        category_id: number;
+        category_name: string;
+        category_color: string | null;
+        category_icon: string | null;
+        budget_id: number | null;
+        budgeted: number;
+        spent: number;
+        percent: number;
+        progress_percent: number;
+        days_left: number;
+        projected: number;
+        alert_threshold: number;
+        threshold_reached: boolean;
+        projected_over_budget: boolean;
+      };
+
+      // fixture; Rust domain tests own projected math
+      const unbudgetedFood: BudgetStatusFixture = {
+        category_id: 1,
+        category_name: '食費',
+        category_color: '#FFAA00',
+        category_icon: '🍱',
+        budget_id: null,
+        budgeted: 0,
+        spent: 0,
+        percent: 0,
+        progress_percent: 0,
+        days_left: 0,
+        projected: 0,
+        alert_threshold: 80,
+        threshold_reached: false,
+        projected_over_budget: false,
+      };
+
+      const budgetStatusByMonth: Record<string, BudgetStatusFixture[]> = {};
+
+      function fixtureStatuses(yearMonth: string): BudgetStatusFixture[] {
+        return budgetStatusByMonth[yearMonth] ?? [unbudgetedFood];
+      }
+
+      function foodAfterSetBudget(budgetId: number): BudgetStatusFixture {
+        return {
+          category_id: 1,
+          category_name: '食費',
+          category_color: '#FFAA00',
+          category_icon: '🍱',
+          budget_id: budgetId,
+          budgeted: 50_000,
+          spent: 0,
+          percent: 0,
+          progress_percent: 0,
+          days_left: 0,
+          projected: 0,
+          alert_threshold: 80,
+          threshold_reached: false,
+          projected_over_budget: false,
+        };
+      }
+
+      function foodAfterExpense(budgetId: number): BudgetStatusFixture {
+        return {
+          category_id: 1,
+          category_name: '食費',
+          category_color: '#FFAA00',
+          category_icon: '🍱',
+          budget_id: budgetId,
+          budgeted: 50_000,
+          spent: 45_000,
+          percent: 90,
+          progress_percent: 90,
+          days_left: 0,
+          projected: 0,
+          alert_threshold: 80,
+          threshold_reached: true,
+          projected_over_budget: false,
+        };
       }
 
       function balances() {
@@ -188,13 +228,12 @@ test('budget warning appears on budgets page and dashboard', async ({ page }) =>
               };
             }
             case 'list_budget_statuses':
-              return budgetStatuses(args.yearMonth);
+              return fixtureStatuses(args.yearMonth);
             case 'list_top_budget_statuses':
-              return budgetStatuses(args.yearMonth)
-                .filter((status) => status.budget_id != null)
-                .slice(0, args.limit ?? 3);
+              return fixtureStatuses(args.yearMonth).filter((status) => status.budget_id != null);
             case 'set_budget': {
-              const startsOn = `${args.input.year_month}-01`;
+              const yearMonth = args.input.year_month as string;
+              const startsOn = `${yearMonth}-01`;
               let budget = state.budgets.find(
                 (item) =>
                   item.category_id === args.input.category_id && item.starts_on === startsOn,
@@ -214,6 +253,7 @@ test('budget warning appears on budgets page and dashboard', async ({ page }) =>
                 budget.amount = args.input.amount;
                 budget.alert_threshold = args.input.alert_threshold;
               }
+              budgetStatusByMonth[yearMonth] = [foodAfterSetBudget(budget.id)];
               emitChanged('budgets');
               return budget;
             }
@@ -247,6 +287,11 @@ test('budget warning appears on budgets page and dashboard', async ({ page }) =>
                 updated_at: '2026-05-25T00:00:00Z',
               };
               state.transactions.push(tx);
+              const yearMonth = tx.occurred_on.slice(0, 7);
+              const budgetId = budgetStatusByMonth[yearMonth]?.[0]?.budget_id;
+              if (budgetId != null) {
+                budgetStatusByMonth[yearMonth] = [foodAfterExpense(budgetId)];
+              }
               emitChanged('transactions');
               return tx;
             }
