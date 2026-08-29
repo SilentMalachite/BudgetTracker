@@ -1,5 +1,28 @@
 use serde::{Serialize, Serializer};
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportRowError {
+    pub index: u32,
+    pub entity: String,
+    pub message: String,
+}
+
+impl std::fmt::Display for ImportRowError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}[{}]: {}", self.entity, self.index, self.message)
+    }
+}
+
+impl ImportRowError {
+    pub fn join_all(errors: &[Self]) -> String {
+        errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     #[error("database error: {0}")]
@@ -31,6 +54,9 @@ pub enum AppError {
 
     #[error("unavailable: {0}")]
     Unavailable(String),
+
+    #[error("import validation failed: {0}")]
+    ImportValidation(String),
 }
 
 pub type AppResult<T> = Result<T, AppError>;
@@ -75,6 +101,42 @@ mod tests {
         assert_eq!(
             AppError::Unavailable("recovery".into()).to_string(),
             "unavailable: recovery"
+        );
+    }
+
+    #[test]
+    fn import_row_errors_join_entity_index_and_message() {
+        let joined = ImportRowError::join_all(&[
+            ImportRowError {
+                index: 2,
+                entity: "transaction".into(),
+                message: "amount must be positive".into(),
+            },
+            ImportRowError {
+                index: 4,
+                entity: "transfer".into(),
+                message: "source and destination must differ".into(),
+            },
+        ]);
+        assert_eq!(
+            joined,
+            "transaction[2]: amount must be positive; transfer[4]: source and destination must differ"
+        );
+        let err = AppError::ImportValidation(joined);
+        assert!(err.to_string().contains("transaction["));
+        assert_eq!(
+            err.to_string(),
+            "import validation failed: transaction[2]: amount must be positive; transfer[4]: source and destination must differ"
+        );
+    }
+
+    #[test]
+    fn import_validation_serializes_to_string() {
+        let err = AppError::ImportValidation("transaction[2]: amount must be positive".into());
+        let json = serde_json::to_string(&err).unwrap();
+        assert_eq!(
+            json,
+            "\"import validation failed: transaction[2]: amount must be positive\""
         );
     }
 }

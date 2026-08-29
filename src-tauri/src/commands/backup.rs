@@ -6,11 +6,15 @@ use serde_json::json;
 use tauri::{AppHandle, State};
 
 use crate::commands::meta::AppState;
-use crate::error::{AppError, AppResult};
+use crate::domain::account::{self, AccountKind};
+use crate::domain::budget::{self, RawSetBudgetInput};
+use crate::domain::category::{self, CategoryType};
+use crate::domain::ledger;
+use crate::error::{AppError, AppResult, ImportRowError};
 use crate::infra::events::{emit_changed, ChangedDomain};
 use crate::infra::repo::meta_repo;
 
-const SUPPORTED_SCHEMA_VERSION: u32 = 1;
+const BACKUP_FORMAT_VERSION: u32 = 1;
 const MAX_PAYLOAD_BYTES: usize = 10 * 1024 * 1024;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -67,7 +71,7 @@ fn select_all(
 
 pub fn export_snapshot_json(conn: &rusqlite::Connection) -> AppResult<String> {
     let snap = Snapshot {
-        schema_version: SUPPORTED_SCHEMA_VERSION,
+        schema_version: BACKUP_FORMAT_VERSION,
         exported_at: chrono::Utc::now().to_rfc3339(),
         categories: select_all(
             conn,
@@ -594,6 +598,185 @@ fn insert_budget(
     }
 }
 
+fn push_error(
+    errors: &mut Vec<ImportRowError>,
+    index: u32,
+    entity: &str,
+    message: impl Into<String>,
+) {
+    errors.push(ImportRowError {
+        index,
+        entity: entity.to_string(),
+        message: message.into(),
+    });
+}
+
+fn domain_message(err: AppError) -> String {
+    match err {
+        AppError::InvalidArgument(msg) => msg,
+        other => other.to_string(),
+    }
+}
+
+fn required_str<'a>(
+    row: &'a serde_json::Value,
+    key: &str,
+    index: u32,
+    entity: &str,
+    errors: &mut Vec<ImportRowError>,
+) -> Option<&'a str> {
+    match value_str(row, key) {
+        Some(value) => Some(value),
+        None => {
+            push_error(errors, index, entity, format!("missing required {key}"));
+            None
+        }
+    }
+}
+
+fn required_i64(
+    row: &serde_json::Value,
+    key: &str,
+    index: u32,
+    entity: &str,
+    errors: &mut Vec<ImportRowError>,
+) -> Option<i64> {
+    match value_i64(row, key) {
+        Some(value) => Some(value),
+        None => {
+            push_error(errors, index, entity, format!("missing required {key}"));
+            None
+        }
+    }
+}
+
+fn validate_account_row(index: u32, row: &serde_json::Value, errors: &mut Vec<ImportRowError>) {
+    const ENTITY: &str = "account";
+    if let Some(name) = required_str(row, "name", index, ENTITY, errors) {
+        if let Err(err) = account::validate_name(name) {
+            push_error(errors, index, ENTITY, domain_message(err));
+        }
+    }
+    if let Some(kind) = required_str(row, "kind", index, ENTITY, errors) {
+        if let Err(err) = AccountKind::parse(kind) {
+            push_error(errors, index, ENTITY, domain_message(err));
+        }
+    }
+    let _ = required_i64(row, "initial_balance", index, ENTITY, errors);
+}
+
+fn validate_category_row(index: u32, row: &serde_json::Value, errors: &mut Vec<ImportRowError>) {
+    const ENTITY: &str = "category";
+    if let Some(name) = required_str(row, "name", index, ENTITY, errors) {
+        if let Err(err) = category::validate_name(name) {
+            push_error(errors, index, ENTITY, domain_message(err));
+        }
+    }
+    if let Some(type_) = required_str(row, "type", index, ENTITY, errors) {
+        if let Err(err) = CategoryType::parse(type_) {
+            push_error(errors, index, ENTITY, domain_message(err));
+        }
+    }
+}
+
+fn validate_income_expense_row(
+    index: u32,
+    type_: &str,
+    row: &serde_json::Value,
+    errors: &mut Vec<ImportRowError>,
+) {
+    const ENTITY: &str = "transaction";
+    let occurred_on = required_str(row, "occurred_on", index, ENTITY, errors);
+    let amount = required_i64(row, "amount", index, ENTITY, errors);
+    let account_id = required_i64(row, "account_id", index, ENTITY, errors);
+    let (Some(occurred_on), Some(amount), Some(account_id)) = (occurred_on, amount, account_id)
+    else {
+        return;
+    };
+    if let Err(err) = ledger::validate_input(&ledger::RawInput {
+        occurred_on,
+        type_,
+        amount,
+        account_id,
+        category_id: value_i64(row, "category_id"),
+        description: value_str(row, "description").unwrap_or(""),
+    }) {
+        push_error(errors, index, ENTITY, domain_message(err));
+    }
+}
+
+fn validate_transfer_row(index: u32, row: &serde_json::Value, errors: &mut Vec<ImportRowError>) {
+    const ENTITY: &str = "transfer";
+    let occurred_on = required_str(row, "occurred_on", index, ENTITY, errors);
+    let amount = required_i64(row, "amount", index, ENTITY, errors);
+    let account_id = required_i64(row, "account_id", index, ENTITY, errors);
+    let counter_account_id = required_i64(row, "counter_account_id", index, ENTITY, errors);
+    let (Some(occurred_on), Some(amount), Some(account_id), Some(counter_account_id)) =
+        (occurred_on, amount, account_id, counter_account_id)
+    else {
+        return;
+    };
+    if let Err(err) = ledger::validate_transfer_input(&ledger::RawTransferInput {
+        occurred_on,
+        amount,
+        account_id,
+        counter_account_id,
+        description: value_str(row, "description").unwrap_or(""),
+    }) {
+        push_error(errors, index, ENTITY, domain_message(err));
+    }
+}
+
+fn validate_transaction_row(index: u32, row: &serde_json::Value, errors: &mut Vec<ImportRowError>) {
+    let Some(type_) = required_str(row, "type", index, "transaction", errors) else {
+        return;
+    };
+    if type_ == "transfer" {
+        validate_transfer_row(index, row, errors);
+    } else {
+        validate_income_expense_row(index, type_, row, errors);
+    }
+}
+
+fn validate_budget_row(index: u32, row: &serde_json::Value, errors: &mut Vec<ImportRowError>) {
+    const ENTITY: &str = "budget";
+    let category_id = required_i64(row, "category_id", index, ENTITY, errors);
+    let amount = required_i64(row, "amount", index, ENTITY, errors);
+    let starts_on = required_str(row, "starts_on", index, ENTITY, errors);
+    let alert_threshold = required_i64(row, "alert_threshold", index, ENTITY, errors);
+    let (Some(category_id), Some(amount), Some(starts_on), Some(alert_threshold)) =
+        (category_id, amount, starts_on, alert_threshold)
+    else {
+        return;
+    };
+    let year_month = starts_on.get(..7).unwrap_or(starts_on);
+    if let Err(err) = budget::validate_set_budget_input(&RawSetBudgetInput {
+        category_id,
+        year_month,
+        amount,
+        alert_threshold,
+    }) {
+        push_error(errors, index, ENTITY, domain_message(err));
+    }
+}
+
+fn collect_import_errors(snap: &Snapshot) -> Vec<ImportRowError> {
+    let mut errors = Vec::new();
+    for (index, row) in snap.accounts.iter().enumerate() {
+        validate_account_row(index as u32, row, &mut errors);
+    }
+    for (index, row) in snap.categories.iter().enumerate() {
+        validate_category_row(index as u32, row, &mut errors);
+    }
+    for (index, row) in snap.transactions.iter().enumerate() {
+        validate_transaction_row(index as u32, row, &mut errors);
+    }
+    for (index, row) in snap.budgets.iter().enumerate() {
+        validate_budget_row(index as u32, row, &mut errors);
+    }
+    errors
+}
+
 pub fn import_snapshot_json(
     conn: &mut rusqlite::Connection,
     payload: &str,
@@ -606,13 +789,20 @@ pub fn import_snapshot_json(
     }
     let snap: Snapshot = serde_json::from_str(payload)
         .map_err(|e| AppError::InvalidArgument(format!("invalid backup JSON: {e}")))?;
-    if snap.schema_version != SUPPORTED_SCHEMA_VERSION {
+    if snap.schema_version != BACKUP_FORMAT_VERSION {
         return Err(AppError::InvalidArgument(format!(
-            "unsupported schema_version {}",
+            "unsupported backup format version {} (expected {BACKUP_FORMAT_VERSION}); this is not app_meta.schema_version",
             snap.schema_version
         )));
     }
     let mode = ImportMode::parse(mode)?;
+
+    let errors = collect_import_errors(&snap);
+    if !errors.is_empty() {
+        return Err(AppError::ImportValidation(ImportRowError::join_all(
+            &errors,
+        )));
+    }
 
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let mut warnings = Vec::new();

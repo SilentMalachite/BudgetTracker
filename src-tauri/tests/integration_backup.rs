@@ -95,6 +95,7 @@ fn count(conn: &Connection, table: &str) -> i64 {
 fn export_then_overwrite_import_restores_state() {
     let mut conn = seeded_db();
     let snapshot = backup::export_snapshot_json(&conn).unwrap();
+    assert!(snapshot.contains("\"schema_version\": 1"));
     assert!(snapshot.contains("食費"));
     assert!(snapshot.contains("ランチ"));
     assert!(snapshot.contains("recurring_rules"));
@@ -239,7 +240,119 @@ fn import_rejects_wrong_schema_version() {
     }"#;
 
     let err = backup::import_snapshot_json(&mut conn, payload, "overwrite").unwrap_err();
-    assert!(err.to_string().contains("unsupported schema_version"));
+    assert!(err
+        .to_string()
+        .contains("unsupported backup format version 999 (expected 1)"));
+}
+
+#[test]
+fn import_rejects_backup_format_version_matching_db_schema() {
+    let mut conn = seeded_db();
+    let payload = r#"{
+      "schema_version": 3,
+      "exported_at": "2026-05-25T00:00:00Z",
+      "categories": [],
+      "accounts": [],
+      "recurring_rules": [],
+      "transactions": [],
+      "budgets": [],
+      "app_meta": []
+    }"#;
+
+    let err = backup::import_snapshot_json(&mut conn, payload, "overwrite").unwrap_err();
+    let message = err.to_string();
+    assert!(
+        message.contains(
+            "unsupported backup format version 3 (expected 1); this is not app_meta.schema_version"
+        ),
+        "{message}"
+    );
+}
+
+#[test]
+fn import_rejects_same_account_transfer_before_commit() {
+    let mut conn = seeded_db();
+    let accounts_before = count(&conn, "accounts");
+    let transactions_before = count(&conn, "transactions");
+    let payload = r#"{
+      "schema_version": 1,
+      "exported_at": "2026-05-25T00:00:00Z",
+      "categories": [],
+      "accounts": [
+        {
+          "id": 1,
+          "name": "現金",
+          "kind": "cash",
+          "currency": "JPY",
+          "initial_balance": 1000,
+          "display_order": 0,
+          "note": "",
+          "archived_at": null,
+          "created_at": "2026-05-25T00:00:00Z",
+          "updated_at": "2026-05-25T00:00:00Z"
+        }
+      ],
+      "recurring_rules": [],
+      "transactions": [
+        {
+          "id": 1,
+          "occurred_on": "2026-05-25",
+          "type": "transfer",
+          "amount": 100,
+          "account_id": 1,
+          "counter_account_id": 1,
+          "category_id": null,
+          "description": "self",
+          "recurring_id": null,
+          "created_at": "2026-05-25T00:00:00Z",
+          "updated_at": "2026-05-25T00:00:00Z"
+        }
+      ],
+      "budgets": [],
+      "app_meta": []
+    }"#;
+
+    let err = backup::import_snapshot_json(&mut conn, payload, "append").unwrap_err();
+    let message = err.to_string();
+    assert!(message.contains("transfer["), "{message}");
+    assert!(message.contains("source and destination"), "{message}");
+    assert_eq!(count(&conn, "accounts"), accounts_before);
+    assert_eq!(count(&conn, "transactions"), transactions_before);
+}
+
+#[test]
+fn import_rejects_empty_account_name() {
+    let mut conn = seeded_db();
+    let accounts_before = count(&conn, "accounts");
+    let payload = r#"{
+      "schema_version": 1,
+      "exported_at": "2026-05-25T00:00:00Z",
+      "categories": [],
+      "accounts": [
+        {
+          "id": 1,
+          "name": "",
+          "kind": "cash",
+          "currency": "JPY",
+          "initial_balance": 0,
+          "display_order": 0,
+          "note": "",
+          "archived_at": null,
+          "created_at": "2026-05-25T00:00:00Z",
+          "updated_at": "2026-05-25T00:00:00Z"
+        }
+      ],
+      "recurring_rules": [],
+      "transactions": [],
+      "budgets": [],
+      "app_meta": []
+    }"#;
+
+    let err = backup::import_snapshot_json(&mut conn, payload, "append").unwrap_err();
+    let message = err.to_string();
+    assert!(message.contains("account["), "{message}");
+    assert!(message.contains("empty"), "{message}");
+    assert_eq!(count(&conn, "accounts"), accounts_before);
 }
 
 #[test]
