@@ -176,7 +176,7 @@ pub fn update(conn: &Connection, id: i64, input: &UpdateInput<'_>) -> AppResult<
         "UPDATE transactions
             SET occurred_on = ?1, type = ?2, amount = ?3, account_id = ?4,
                 counter_account_id = NULL, category_id = ?5, description = ?6, updated_at = ?7
-          WHERE id = ?8",
+          WHERE id = ?8 AND type != 'transfer'",
         params![
             input.occurred_on,
             input.type_.as_sql(),
@@ -189,6 +189,12 @@ pub fn update(conn: &Connection, id: i64, input: &UpdateInput<'_>) -> AppResult<
         ],
     )?;
     if n == 0 {
+        let existing = find_by_id(conn, id)?;
+        if existing.type_ == TxType::Transfer {
+            return Err(AppError::InvalidArgument(
+                "use create_transfer or update_transfer for transfer rows".into(),
+            ));
+        }
         return Err(AppError::NotFound(format!("transaction {id}")));
     }
     Ok(())

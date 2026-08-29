@@ -1,8 +1,9 @@
 use budget_tracker_lib::domain::account::AccountKind;
+use budget_tracker_lib::domain::category::CategoryType;
 use budget_tracker_lib::domain::ledger::TxType;
 use budget_tracker_lib::error::AppError;
 use budget_tracker_lib::infra::migrations;
-use budget_tracker_lib::infra::repo::{account_repo, transaction_repo};
+use budget_tracker_lib::infra::repo::{account_repo, category_repo, transaction_repo};
 use rusqlite::Connection;
 
 const NOW: &str = "2026-05-25T00:00:00+00:00";
@@ -200,9 +201,53 @@ fn update_transfer_changes_amount_and_destination() {
 }
 
 #[test]
+fn update_transaction_rejects_existing_transfer_row() {
+    let (conn, cash, bank) = seeded_db();
+    let id = transaction_repo::insert_transfer(
+        &conn,
+        &transaction_repo::InsertTransferInput {
+            occurred_on: "2026-05-25",
+            amount: 1_000,
+            account_id: cash,
+            counter_account_id: bank,
+            description: "",
+            now: NOW,
+        },
+    )
+    .unwrap();
+    let cat = category_repo::insert(
+        &conn,
+        &category_repo::InsertInput {
+            name: "Food",
+            type_: CategoryType::Expense,
+            color: None,
+            icon: None,
+            display_order: 0,
+        },
+    )
+    .unwrap();
+    let err = transaction_repo::update(
+        &conn,
+        id,
+        &transaction_repo::UpdateInput {
+            occurred_on: "2026-05-25",
+            type_: TxType::Expense,
+            amount: 100,
+            account_id: cash,
+            category_id: cat,
+            description: "",
+            now: NOW,
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(err, AppError::InvalidArgument(_)));
+    assert!(err
+        .to_string()
+        .contains("use create_transfer or update_transfer for transfer rows"));
+}
+
+#[test]
 fn update_transfer_refuses_non_transfer_row() {
-    use budget_tracker_lib::domain::category::CategoryType;
-    use budget_tracker_lib::infra::repo::category_repo;
     let (conn, cash, bank) = seeded_db();
     let cat = category_repo::insert(
         &conn,

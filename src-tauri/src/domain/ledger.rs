@@ -69,7 +69,8 @@ pub struct RawInput<'a> {
     pub description: &'a str,
 }
 
-/// Validate an income/expense transaction input. Phase 2 rejects `transfer`.
+/// Validate an income/expense transaction input. Transfer rows must use the
+/// dedicated create_transfer / update_transfer commands.
 pub fn validate_input(raw: &RawInput<'_>) -> AppResult<ValidatedInput> {
     chrono::NaiveDate::parse_from_str(raw.occurred_on, "%Y-%m-%d").map_err(|_| {
         AppError::InvalidArgument(format!(
@@ -81,7 +82,7 @@ pub fn validate_input(raw: &RawInput<'_>) -> AppResult<ValidatedInput> {
     let type_ = TxType::parse(raw.type_)?;
     if matches!(type_, TxType::Transfer) {
         return Err(AppError::InvalidArgument(
-            "transfer transactions are not supported in Phase 2".into(),
+            "use create_transfer or update_transfer for transfer rows".into(),
         ));
     }
 
@@ -110,6 +111,64 @@ pub fn validate_input(raw: &RawInput<'_>) -> AppResult<ValidatedInput> {
         category_id,
         description: raw.description.to_string(),
     })
+}
+
+pub struct AllowedArchivedRefs {
+    pub account_id: Option<i64>,
+    pub category_id: Option<i64>,
+    pub counter_account_id: Option<i64>,
+}
+
+impl AllowedArchivedRefs {
+    pub fn none() -> Self {
+        Self {
+            account_id: None,
+            category_id: None,
+            counter_account_id: None,
+        }
+    }
+}
+
+pub fn assert_account_writable(
+    account: &crate::domain::account::Account,
+    allow_id: Option<i64>,
+) -> AppResult<()> {
+    if account.archived_at.is_some() && allow_id != Some(account.id) {
+        return Err(AppError::InvalidArgument(format!(
+            "account {} is archived",
+            account.id
+        )));
+    }
+    Ok(())
+}
+
+pub fn assert_category_matches_tx(
+    category: &crate::domain::category::Category,
+    tx_type: TxType,
+    allow_id: Option<i64>,
+) -> AppResult<()> {
+    if category.archived_at.is_some() && allow_id != Some(category.id) {
+        return Err(AppError::InvalidArgument(format!(
+            "category {} is archived",
+            category.id
+        )));
+    }
+    let expected = match tx_type {
+        TxType::Income => crate::domain::category::CategoryType::Income,
+        TxType::Expense => crate::domain::category::CategoryType::Expense,
+        TxType::Transfer => {
+            return Err(AppError::InvalidArgument(
+                "use create_transfer or update_transfer for transfer rows".into(),
+            ));
+        }
+    };
+    if category.type_ != expected {
+        return Err(AppError::InvalidArgument(format!(
+            "category {} type does not match transaction type",
+            category.id
+        )));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -259,7 +318,9 @@ mod tests {
         bad.type_ = "transfer";
         let err = validate_input(&bad).unwrap_err();
         assert!(matches!(err, AppError::InvalidArgument(_)));
-        assert!(err.to_string().contains("transfer"));
+        assert!(err
+            .to_string()
+            .contains("use create_transfer or update_transfer for transfer rows"));
     }
 
     #[test]
@@ -356,6 +417,67 @@ mod tests {
         bad.occurred_on = "garbage".into();
         let s = aggregate_monthly(&[bad], 2026, 5);
         assert_eq!(s.income, 0);
+    }
+
+    fn sample_account(id: i64, archived: bool) -> crate::domain::account::Account {
+        crate::domain::account::Account {
+            id,
+            name: "cash".into(),
+            kind: crate::domain::account::AccountKind::Cash,
+            currency: "JPY".into(),
+            initial_balance: 0,
+            display_order: 0,
+            note: String::new(),
+            archived_at: archived.then(|| "2026-05-25T00:00:00+00:00".into()),
+            created_at: "2026-05-25T00:00:00+00:00".into(),
+            updated_at: "2026-05-25T00:00:00+00:00".into(),
+        }
+    }
+
+    fn sample_category(
+        id: i64,
+        type_: crate::domain::category::CategoryType,
+        archived: bool,
+    ) -> crate::domain::category::Category {
+        crate::domain::category::Category {
+            id,
+            name: "cat".into(),
+            type_,
+            color: None,
+            icon: None,
+            display_order: 0,
+            archived_at: archived.then(|| "2026-05-25T00:00:00+00:00".into()),
+        }
+    }
+
+    #[test]
+    fn expense_with_income_category_is_rejected() {
+        let cat = sample_category(2, crate::domain::category::CategoryType::Income, false);
+        let err = assert_category_matches_tx(&cat, TxType::Expense, None).unwrap_err();
+        assert!(matches!(err, AppError::InvalidArgument(_)));
+        assert!(err.to_string().contains("type does not match"));
+    }
+
+    #[test]
+    fn archived_account_on_create_is_rejected() {
+        let acc = sample_account(1, true);
+        let err = assert_account_writable(&acc, None).unwrap_err();
+        assert!(matches!(err, AppError::InvalidArgument(_)));
+        assert!(err.to_string().contains("archived"));
+    }
+
+    #[test]
+    fn archived_account_with_same_allow_id_is_ok() {
+        let acc = sample_account(1, true);
+        assert!(assert_account_writable(&acc, Some(1)).is_ok());
+    }
+
+    #[test]
+    fn archived_account_with_other_allow_id_is_rejected() {
+        let acc = sample_account(1, true);
+        let err = assert_account_writable(&acc, Some(99)).unwrap_err();
+        assert!(matches!(err, AppError::InvalidArgument(_)));
+        assert!(err.to_string().contains("archived"));
     }
 
     fn ok_transfer() -> RawTransferInput<'static> {

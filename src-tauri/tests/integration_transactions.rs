@@ -1,6 +1,8 @@
+use budget_tracker_lib::commands::transactions;
 use budget_tracker_lib::domain::account::AccountKind;
 use budget_tracker_lib::domain::category::CategoryType;
-use budget_tracker_lib::domain::ledger::TxType;
+use budget_tracker_lib::domain::ledger::{self, TxType};
+use budget_tracker_lib::error::AppError;
 use budget_tracker_lib::infra::migrations;
 use budget_tracker_lib::infra::repo::{account_repo, category_repo, transaction_repo};
 use rusqlite::Connection;
@@ -223,6 +225,63 @@ fn list_includes_transfer_rows_after_slice_02() {
         transaction_repo::list(&conn, &transaction_repo::ListFilter::default(), 0, 50).unwrap();
     assert_eq!(total, 2);
     assert_eq!(items.len(), 2);
+}
+
+#[test]
+fn create_expense_with_income_category_is_rejected() {
+    let (conn, acc, _cat) = seeded_db();
+    let income_cat = category_repo::insert(
+        &conn,
+        &category_repo::InsertInput {
+            name: "Salary",
+            type_: CategoryType::Income,
+            color: None,
+            icon: None,
+            display_order: 1,
+        },
+    )
+    .unwrap();
+    let validated = ledger::validate_input(&ledger::RawInput {
+        occurred_on: "2026-05-25",
+        type_: "expense",
+        amount: 100,
+        account_id: acc,
+        category_id: Some(income_cat),
+        description: "",
+    })
+    .unwrap();
+    let err = transactions::prepare_income_expense(
+        &conn,
+        &validated,
+        ledger::AllowedArchivedRefs::none(),
+    )
+    .unwrap_err();
+    assert!(matches!(err, AppError::InvalidArgument(_)));
+    assert!(err.to_string().contains("type does not match"));
+}
+
+#[test]
+fn create_with_missing_account_is_not_found() {
+    let (conn, _acc, cat) = seeded_db();
+    let validated = ledger::validate_input(&ledger::RawInput {
+        occurred_on: "2026-05-25",
+        type_: "expense",
+        amount: 100,
+        account_id: 999,
+        category_id: Some(cat),
+        description: "",
+    })
+    .unwrap();
+    let err = transactions::prepare_income_expense(
+        &conn,
+        &validated,
+        ledger::AllowedArchivedRefs::none(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, AppError::NotFound(_)),
+        "missing parent must be NotFound, got {err:?}"
+    );
 }
 
 #[test]

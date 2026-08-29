@@ -1,4 +1,4 @@
-use rusqlite::TransactionBehavior;
+use rusqlite::{Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
@@ -6,10 +6,26 @@ use crate::commands::meta::AppState;
 use crate::domain::ledger::{self, Transaction, TxType};
 use crate::error::{AppError, AppResult};
 use crate::infra::events::{emit_changed, ChangedDomain};
-use crate::infra::repo::transaction_repo;
+use crate::infra::repo::{account_repo, category_repo, transaction_repo};
 
 fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+fn load_account(conn: &Connection, id: i64) -> AppResult<crate::domain::account::Account> {
+    account_repo::find_by_id(conn, id)
+}
+
+pub fn prepare_income_expense(
+    conn: &Connection,
+    validated: &ledger::ValidatedInput,
+    allow: ledger::AllowedArchivedRefs,
+) -> AppResult<()> {
+    let account = load_account(conn, validated.account_id)?;
+    ledger::assert_account_writable(&account, allow.account_id)?;
+    let category = category_repo::find_by_id(conn, validated.category_id)?;
+    ledger::assert_category_matches_tx(&category, validated.type_, allow.category_id)?;
+    Ok(())
 }
 
 pub fn parse_page_size(page_size: u32) -> AppResult<u32> {
@@ -87,8 +103,10 @@ pub fn create_transaction(
         description: &input.description,
     })?;
     let now = now_iso();
+    let allow = ledger::AllowedArchivedRefs::none();
     let transaction = state.with_conn_mut(|conn| {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        prepare_income_expense(&tx, &validated, allow)?;
         let id = transaction_repo::insert(
             &tx,
             &transaction_repo::InsertInput {
@@ -139,6 +157,18 @@ pub fn update_transaction(
     let now = now_iso();
     let transaction = state.with_conn_mut(|conn| {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing = transaction_repo::find_by_id(&tx, id)?;
+        if existing.type_ == TxType::Transfer {
+            return Err(AppError::InvalidArgument(
+                "use create_transfer or update_transfer for transfer rows".into(),
+            ));
+        }
+        let allow = ledger::AllowedArchivedRefs {
+            account_id: Some(existing.account_id),
+            category_id: existing.category_id,
+            counter_account_id: existing.counter_account_id,
+        };
+        prepare_income_expense(&tx, &validated, allow)?;
         transaction_repo::update(
             &tx,
             id,
@@ -198,6 +228,10 @@ pub fn create_transfer(
     let now = now_iso();
     let transaction = state.with_conn_mut(|conn| {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let from = load_account(&tx, validated.account_id)?;
+        ledger::assert_account_writable(&from, None)?;
+        let to = load_account(&tx, validated.counter_account_id)?;
+        ledger::assert_account_writable(&to, None)?;
         let id = transaction_repo::insert_transfer(
             &tx,
             &transaction_repo::InsertTransferInput {
@@ -244,6 +278,16 @@ pub fn update_transfer(
     let now = now_iso();
     let transaction = state.with_conn_mut(|conn| {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing = transaction_repo::find_by_id(&tx, id)?;
+        let allow = ledger::AllowedArchivedRefs {
+            account_id: Some(existing.account_id),
+            category_id: existing.category_id,
+            counter_account_id: existing.counter_account_id,
+        };
+        let from = load_account(&tx, validated.account_id)?;
+        ledger::assert_account_writable(&from, allow.account_id)?;
+        let to = load_account(&tx, validated.counter_account_id)?;
+        ledger::assert_account_writable(&to, allow.counter_account_id)?;
         transaction_repo::update_transfer(
             &tx,
             id,
