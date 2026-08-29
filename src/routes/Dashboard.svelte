@@ -18,10 +18,10 @@
   import { listTransactions, type Transaction } from '../lib/api/transactions';
   import { createBalancesStore } from '../lib/stores/balances.svelte';
   import { createCategoriesStore } from '../lib/stores/categories.svelte';
+  import { formatCurrency } from '../lib/utils/formatCurrency';
 
   Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend);
 
-  const yen = new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' });
   const today = new Date();
   const currentYear = today.getFullYear();
   const currentMonth = today.getMonth() + 1;
@@ -148,7 +148,7 @@
         <div class="assets-card">
           <div class="assets-head">
             <small>総資産</small>
-            <strong data-testid="card-total-assets">{yen.format(balancesStore.totalAssets)}</strong>
+            <strong data-testid="card-total-assets">{formatCurrency(balancesStore.totalAssets)}</strong>
             {#if balancesStore.error}
               <small class="error">エラー: {balancesStore.error}</small>
             {/if}
@@ -161,7 +161,7 @@
                 <li>
                   <span class="acct-name">{account.name}</span>
                   <span class="acct-balance" data-testid={`balance-${account.account_id}`}>
-                    {yen.format(account.balance)}
+                    {formatCurrency(account.balance)}
                   </span>
                 </li>
               {/each}
@@ -182,7 +182,7 @@
       {#snippet children()}
         <small>{currentYear}年{currentMonth}月の収入</small>
         <strong class="income" data-testid="card-income">
-          {summary ? yen.format(summary.income) : '---'}
+          {summary ? formatCurrency(summary.income) : '---'}
         </strong>
       {/snippet}
     </Card>
@@ -190,7 +190,7 @@
       {#snippet children()}
         <small>{currentYear}年{currentMonth}月の支出</small>
         <strong class="expense" data-testid="card-expense">
-          {summary ? yen.format(summary.expense) : '---'}
+          {summary ? formatCurrency(summary.expense) : '---'}
         </strong>
       {/snippet}
     </Card>
@@ -202,7 +202,7 @@
           class:negative={(summary?.net ?? 0) < 0}
           data-testid="card-net"
         >
-          {summary ? yen.format(summary.net) : '---'}
+          {summary ? formatCurrency(summary.net) : '---'}
         </strong>
       {/snippet}
     </Card>
@@ -241,7 +241,7 @@
                   class:income={transaction.type === 'income'}
                   class:expense={transaction.type === 'expense'}
                 >
-                  {#if transaction.type === 'expense'}-{:else if transaction.type === 'income'}+{/if}{yen.format(transaction.amount)}
+                  {#if transaction.type === 'expense'}-{:else if transaction.type === 'income'}+{/if}{formatCurrency(transaction.amount)}
                 </span>
               </li>
             {/each}
@@ -267,7 +267,7 @@
                   <span style={`width: ${status.progress_percent}%`}></span>
                 </div>
                 <small>
-                  {yen.format(status.spent)} / {yen.format(status.budgeted)}
+                  {formatCurrency(status.spent)} / {formatCurrency(status.budgeted)}
                   {#if status.threshold_reached}<em>警告</em>{/if}
                   {#if status.projected_over_budget}<em>予測超過</em>{/if}
                 </small>

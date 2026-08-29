@@ -20,8 +20,9 @@
     type Transaction,
     type TxType,
   } from '../lib/api/transactions';
+  import { formatCurrency } from '../lib/utils/formatCurrency';
   import { optionsWithCurrent } from '../lib/utils/selectOptions';
-  import { isoToday } from '../lib/utils/yearMonth';
+  import { isoToday, monthRange } from '../lib/utils/yearMonth';
 
   const txStore = createTransactionsStore({}, 50);
   const catStore = createCategoriesStore({ include_archived: true });
@@ -33,21 +34,32 @@
     void accStore.dispose();
   });
 
-  const yen = new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' });
-
   type FormType = 'income' | 'expense' | 'transfer';
 
   let filterType = $state<'all' | 'income' | 'expense' | 'transfer'>('all');
   let filterFrom = $state('');
   let filterTo = $state('');
   let filterSearch = $state('');
+  let filterCategory = $state('');
+  let filterAccount = $state('');
+  let filterMonth = $state(''); // YYYY-MM or ''
 
   function applyFilter() {
+    let from = filterFrom || undefined;
+    let to = filterTo || undefined;
+    if (filterMonth) {
+      const [y, m] = filterMonth.split('-').map((p) => Number.parseInt(p, 10));
+      const range = monthRange(y, m);
+      from = range.from;
+      to = range.to;
+    }
     txStore.setFilter({
       type: filterType === 'all' ? undefined : (filterType as TxType),
-      from: filterFrom || undefined,
-      to: filterTo || undefined,
+      from,
+      to,
       search: filterSearch || undefined,
+      category_id: filterCategory ? Number.parseInt(filterCategory, 10) : undefined,
+      account_id: filterAccount ? Number.parseInt(filterAccount, 10) : undefined,
     });
   }
 
@@ -196,6 +208,26 @@
   const categoryById = $derived(new Map(catStore.items.map((item) => [item.id, item])));
   const accountById = $derived(new Map(accStore.items.map((item) => [item.id, item])));
 
+  const filterCategoryOptions = $derived([
+    { value: '', label: 'すべて' },
+    ...catStore.items
+      .filter((category) => !category.archived_at)
+      .map((category) => ({
+        value: String(category.id),
+        label: `${category.name}（${category.type === 'income' ? '収入' : '支出'}）`,
+      })),
+  ]);
+
+  const filterAccountOptions = $derived([
+    { value: '', label: 'すべて' },
+    ...accStore.items
+      .filter((account) => !account.archived_at)
+      .map((account) => ({
+        value: String(account.id),
+        label: account.name,
+      })),
+  ]);
+
   const categoryOptions = $derived(
     formType === 'transfer'
       ? []
@@ -300,6 +332,12 @@
             { value: 'transfer', label: '振替' },
           ]}
         />
+        <Select label="カテゴリ" bind:value={filterCategory} options={filterCategoryOptions} />
+        <Select label="口座" bind:value={filterAccount} options={filterAccountOptions} />
+        <label class="field">
+          <span>月</span>
+          <input type="month" bind:value={filterMonth} data-testid="tx-filter-month" />
+        </label>
         <DatePicker label="開始" bind:value={filterFrom} />
         <DatePicker label="終了" bind:value={filterTo} />
         <TextField label="フリーワード" bind:value={filterSearch} placeholder="メモを検索" />
@@ -338,7 +376,7 @@
                   {accountById.get(transaction.account_id)?.name ?? '-'}
                 </td>
                 <td class={amountClass(transaction.type)}>
-                  {amountSign(transaction.type)}{yen.format(transaction.amount)}
+                  {amountSign(transaction.type)}{formatCurrency(transaction.amount)}
                 </td>
                 <td>{transaction.description}</td>
                 <td class="actions">
@@ -449,9 +487,26 @@
 
   .filters {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
     gap: var(--space-4);
     align-items: end;
+  }
+
+  .filters .field {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .filters .field span {
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+
+  .filters input[type='month'] {
+    padding: var(--space-3);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface);
   }
 
   table {

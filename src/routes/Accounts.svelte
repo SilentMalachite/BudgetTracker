@@ -19,6 +19,7 @@
   } from '../lib/api/accounts';
   import { createAccountsStore } from '../lib/stores/accounts.svelte';
   import { createBalancesStore } from '../lib/stores/balances.svelte';
+  import { formatCurrency } from '../lib/utils/formatCurrency';
 
   const store = createAccountsStore(true);
   const balances = createBalancesStore();
@@ -27,7 +28,6 @@
     void balances.dispose();
   });
 
-  const yen = new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' });
   const kindOptions = (Object.keys(ACCOUNT_KIND_LABELS) as AccountKind[]).map((kind) => ({
     value: kind,
     label: `${ACCOUNT_KIND_ICONS[kind]} ${ACCOUNT_KIND_LABELS[kind]}`,
@@ -139,9 +139,9 @@
                 </span>
               {:else}
                 <span class="balance" data-testid={`account-balance-${account.id}`}>
-                  <strong>{yen.format(balanceById.get(account.id) ?? account.initial_balance)}</strong>
+                  <strong>{formatCurrency(balanceById.get(account.id) ?? account.initial_balance)}</strong>
                   {#if (balanceById.get(account.id) ?? account.initial_balance) !== account.initial_balance}
-                    <small>初期 {yen.format(account.initial_balance)}</small>
+                    <small>初期 {formatCurrency(account.initial_balance)}</small>
                   {/if}
                 </span>
               {/if}
@@ -185,9 +185,9 @@
               {:else}
                 {@const computed = balanceById.get(account.id) ?? 0}
                 <span class="balance" data-testid={`account-balance-${account.id}`}>
-                  <strong>{yen.format(computed)}</strong>
+                  <strong>{formatCurrency(computed)}</strong>
                   {#if computed !== account.initial_balance}
-                    <small>初期 {yen.format(account.initial_balance)}</small>
+                    <small>初期 {formatCurrency(account.initial_balance)}</small>
                   {/if}
                 </span>
               {/if}
