@@ -37,25 +37,31 @@
   let canvas = $state<HTMLCanvasElement | null>(null);
   let chart: Chart<'bar'> | null = null;
   let unlisten: UnlistenFn | null = null;
+  let disposed = false;
+  let reloadId = 0;
 
   const categoryById = $derived(new Map(catStore.items.map((item) => [item.id, item])));
 
   async function reload() {
+    const id = ++reloadId;
     error = null;
     try {
       const [nextSummary, nextSeries, nextRecent, nextBudgets] = await Promise.all([
         monthlySummary(currentYear, currentMonth),
         monthlySeries(12),
         listTransactions({}, 0, 10),
-        listBudgetStatuses(currentYearMonth),
+        listBudgetStatuses(currentYearMonth), // replaced in Task 13 with listTopBudgetStatuses
       ]);
+      if (disposed || id !== reloadId) return;
       summary = nextSummary;
       series = nextSeries;
       recent = nextRecent.items;
       budgetStatuses = nextBudgets;
       drawChart();
     } catch (e) {
+      if (disposed || id !== reloadId) return;
       error = e instanceof Error ? e.message : String(e);
+      summary = null;
       series = [];
       recent = [];
       budgetStatuses = [];
@@ -64,7 +70,7 @@
   }
 
   function drawChart() {
-    if (!canvas) return;
+    if (disposed || !canvas) return;
     const labels = series.map((bucket) => bucket.year_month);
     const income = series.map((bucket) => bucket.income);
     const expense = series.map((bucket) => bucket.expense);
@@ -97,8 +103,10 @@
   onMount(() => {
     void (async () => {
       await reload();
+      if (disposed) return;
       try {
-        unlisten = await onDataChanged((domain) => {
+        const nextUnlisten = await onDataChanged((domain) => {
+          if (disposed) return;
           if (
             domain === 'transactions' ||
             domain === 'categories' ||
@@ -108,13 +116,16 @@
             void reload();
           }
         });
+        if (disposed) nextUnlisten();
+        else unlisten = nextUnlisten;
       } catch {
-        // Browser-only E2E has no Tauri event bus; the dashboard can still render.
+        // Browser-only E2E has no Tauri event bus.
       }
     })();
   });
 
   onDestroy(() => {
+    disposed = true;
     chart?.destroy();
     chart = null;
     unlisten?.();
