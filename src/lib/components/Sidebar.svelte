@@ -4,6 +4,7 @@
     { path: '/transactions', label: '取引', icon: '💸' },
     { path: '/categories', label: 'カテゴリ', icon: '🏷️' },
     { path: '/budgets', label: '予算', icon: '📊' },
+    { path: '/recurring', label: '定期取引', icon: '🔁' },
     { path: '/accounts', label: '口座', icon: '🏦' },
     { path: '/settings', label: '設定', icon: '⚙️' },
   ];

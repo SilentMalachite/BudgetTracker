@@ -10,6 +10,8 @@ const readyBootResults: Record<string, unknown> = {
   list_transactions: { items: [], total: 0 },
   list_categories: [],
   list_accounts: [],
+  list_recurring_rules: [],
+  expand_due_recurring: { generated: 0, rules: [], skipped: [] },
 };
 
 export function readyBootResult(command: string): unknown {
