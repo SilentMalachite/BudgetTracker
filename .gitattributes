@@ -1,0 +1,10 @@
+# 行末は全プラットフォームで LF に統一する。
+# tests/fixtures/responses/*.json は serde_json の出力 (LF) とバイト単位で
+# 比較されるため、Windows チェックアウトで CRLF に変換されると
+# cargo test --test response_fixtures が全件落ちる。
+* text=auto eol=lf
+
+# 画像はテキスト変換の対象外。
+*.png binary
+*.ico binary
+*.icns binary
