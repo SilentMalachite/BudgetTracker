@@ -2,15 +2,14 @@
   import Card from '../../lib/components/Card.svelte';
   import Chart from '../../lib/components/Chart.svelte';
   import EmptyState from '../../lib/components/EmptyState.svelte';
+  import ReportState from '../../lib/components/ReportState.svelte';
   import type { NetWorthReport } from '../../lib/api/reports';
 
   let {
     report,
-    loading,
     error,
   }: {
     report: NetWorthReport | null;
-    loading: boolean;
     error: string | null;
   } = $props();
 
@@ -65,13 +64,7 @@
     {#snippet children()}
       <h2>純資産推移</h2>
       {#if report === null}
-        {#if loading}
-          <EmptyState title="読み込み中" hint="集計を取得しています" />
-        {:else if error}
-          <EmptyState title="読み込みに失敗しました" hint={error} />
-        {:else}
-          <EmptyState title="読み込み中" hint="集計を取得しています" />
-        {/if}
+        <ReportState {error} />
       {:else if points.length === 0}
         <EmptyState title="データがありません" hint="口座と取引を登録すると表示されます" />
       {:else}
@@ -93,13 +86,7 @@
     {#snippet children()}
       <h2>月次収支と3ヶ月移動平均</h2>
       {#if report === null}
-        {#if loading}
-          <EmptyState title="読み込み中" hint="集計を取得しています" />
-        {:else if error}
-          <EmptyState title="読み込みに失敗しました" hint={error} />
-        {:else}
-          <EmptyState title="読み込み中" hint="集計を取得しています" />
-        {/if}
+        <ReportState {error} />
       {:else if points.length === 0}
         <EmptyState title="データがありません" hint="取引ページから記録できます" />
       {:else}

@@ -1,21 +1,39 @@
 <script lang="ts">
   import Card from '../../lib/components/Card.svelte';
   import Chart from '../../lib/components/Chart.svelte';
-  import EmptyState from '../../lib/components/EmptyState.svelte';
+  import ReportState from '../../lib/components/ReportState.svelte';
   import { formatCurrency } from '../../lib/utils/formatCurrency';
   import type { YearlyReport } from '../../lib/api/reports';
 
   let {
     report,
+    year,
     onYearChange,
-    loading,
     error,
   }: {
     report: YearlyReport | null;
+    /** ストアが持つ唯一の正。`report?.year` は非同期で遅れるので入力欄には使わない。 */
+    year: number;
     onYearChange: (year: number) => void;
-    loading: boolean;
     error: string | null;
   } = $props();
+
+  let yearError = $state<string | null>(null);
+
+  function handleYearChange(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const next = Number(input.value);
+    if (Number.isInteger(next) && next >= 1000 && next <= 9999) {
+      yearError = null;
+      onYearChange(next);
+      return;
+    }
+    // 拒否したことを画面に残す。value はストアの year に固定したままなので、
+    // 入力欄自体もここで正しい値に戻しておく（黙って古い/不正な表示のまま
+    // にしない）。
+    yearError = `"${input.value}" は年として使えません。1000〜9999の整数を入力してください`;
+    input.value = String(year);
+  }
 
   const chartData = $derived({
     labels: (report?.months ?? []).map((bucket) => bucket.year_month),
@@ -48,27 +66,31 @@
       type="number"
       min="1000"
       max="9999"
-      value={report?.year ?? new Date().getFullYear()}
+      value={year}
       data-testid="report-year"
-      onchange={(event) => {
-        const next = Number((event.currentTarget as HTMLInputElement).value);
-        if (Number.isInteger(next) && next >= 1000 && next <= 9999) onYearChange(next);
-      }}
+      onchange={handleYearChange}
     />
   </div>
+  {#if yearError}
+    <p class="year-error" data-testid="report-year-error">{yearError}</p>
+  {/if}
 
   <Card>
     {#snippet children()}
       <h2>月別の収入 / 支出</h2>
-      <div class="chart-box">
-        <Chart
-          type="bar"
-          data={chartData}
-          options={chartOptions}
-          ariaLabel="年間の収入と支出の積み上げ"
-          testId="chart-reports-yearly"
-        />
-      </div>
+      {#if report === null}
+        <ReportState {error} />
+      {:else}
+        <div class="chart-box">
+          <Chart
+            type="bar"
+            data={chartData}
+            options={chartOptions}
+            ariaLabel="年間の収入と支出の積み上げ"
+            testId="chart-reports-yearly"
+          />
+        </div>
+      {/if}
     {/snippet}
   </Card>
 
@@ -76,13 +98,7 @@
     {#snippet children()}
       <h2>年間サマリー</h2>
       {#if report === null}
-        {#if loading}
-          <EmptyState title="読み込み中" hint="集計を取得しています" />
-        {:else if error}
-          <EmptyState title="読み込みに失敗しました" hint={error} />
-        {:else}
-          <EmptyState title="読み込み中" hint="集計を取得しています" />
-        {/if}
+        <ReportState {error} />
       {:else}
         <dl class="summary" data-testid="yearly-summary">
           <div>
@@ -118,6 +134,12 @@
     align-items: center;
     gap: var(--space-3);
     color: white;
+  }
+
+  .year-error {
+    color: var(--danger);
+    font-weight: 700;
+    margin: calc(-1 * var(--space-3)) 0 0;
   }
 
   h2 {

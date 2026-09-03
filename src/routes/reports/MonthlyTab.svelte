@@ -2,6 +2,7 @@
   import Card from '../../lib/components/Card.svelte';
   import Chart from '../../lib/components/Chart.svelte';
   import EmptyState from '../../lib/components/EmptyState.svelte';
+  import ReportState from '../../lib/components/ReportState.svelte';
   import { formatCurrency } from '../../lib/utils/formatCurrency';
   import type { Delta, MonthlyBucket, MonthlyReport } from '../../lib/api/reports';
 
@@ -10,15 +11,17 @@
     series,
     year,
     month,
-    loading,
     error,
+    seriesError,
   }: {
     report: MonthlyReport | null;
     series: MonthlyBucket[];
     year: number;
     month: number;
-    loading: boolean;
+    /** 比較・Top5 カードが読む、4本レポートの取得失敗。 */
     error: string | null;
+    /** 棒グラフが読む、`monthlySeries` 単独の取得失敗（4本とは別物、規約はブリーフ参照）。 */
+    seriesError: string | null;
   } = $props();
 
   const chartData = $derived({
@@ -45,15 +48,19 @@
   <Card>
     {#snippet children()}
       <h2>月別収支</h2>
-      <div class="chart-box">
-        <Chart
-          type="bar"
-          data={chartData}
-          options={chartOptions}
-          ariaLabel="直近12ヶ月の収入と支出"
-          testId="chart-reports-monthly"
-        />
-      </div>
+      {#if series.length === 0}
+        <ReportState error={seriesError} />
+      {:else}
+        <div class="chart-box">
+          <Chart
+            type="bar"
+            data={chartData}
+            options={chartOptions}
+            ariaLabel="直近12ヶ月の収入と支出"
+            testId="chart-reports-monthly"
+          />
+        </div>
+      {/if}
     {/snippet}
   </Card>
 
@@ -61,13 +68,7 @@
     {#snippet children()}
       <h2>{year}年{month}月の比較</h2>
       {#if report === null}
-        {#if loading}
-          <EmptyState title="読み込み中" hint="集計を取得しています" />
-        {:else if error}
-          <EmptyState title="読み込みに失敗しました" hint={error} />
-        {:else}
-          <EmptyState title="読み込み中" hint="集計を取得しています" />
-        {/if}
+        <ReportState {error} />
       {:else}
         <dl class="compare" data-testid="monthly-compare">
           <div>
@@ -94,7 +95,9 @@
   <Card>
     {#snippet children()}
       <h2>支出 Top5</h2>
-      {#if !report || report.top_expense.length === 0}
+      {#if report === null}
+        <ReportState {error} />
+      {:else if report.top_expense.length === 0}
         <EmptyState title="支出がありません" hint="取引ページから記録できます" />
       {:else}
         <ol class="ranking" data-testid="top-expense">
@@ -112,7 +115,9 @@
   <Card>
     {#snippet children()}
       <h2>収入 Top5</h2>
-      {#if !report || report.top_income.length === 0}
+      {#if report === null}
+        <ReportState {error} />
+      {:else if report.top_income.length === 0}
         <EmptyState title="収入がありません" hint="取引ページから記録できます" />
       {:else}
         <ol class="ranking" data-testid="top-income">

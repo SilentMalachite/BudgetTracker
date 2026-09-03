@@ -2,16 +2,15 @@
   import Card from '../../lib/components/Card.svelte';
   import Chart from '../../lib/components/Chart.svelte';
   import EmptyState from '../../lib/components/EmptyState.svelte';
+  import ReportState from '../../lib/components/ReportState.svelte';
   import { formatCurrency } from '../../lib/utils/formatCurrency';
   import type { CategoryReport } from '../../lib/api/reports';
 
   let {
     report,
-    loading,
     error,
   }: {
     report: CategoryReport | null;
-    loading: boolean;
     error: string | null;
   } = $props();
 
@@ -19,6 +18,28 @@
   const TREND_LIMIT = 5;
 
   let selectedCategoryId = $state<number | null>(null);
+
+  // 選択は「軸（期間）」に紐付く。プリセットを変えて選んでいたカテゴリが新しい期間の
+  // 対象外になったら、visibleSeries が空になり selectedName が "—" になって取り残される
+  // （凡例からもそのボタンが消えるので、選択を外す手段が無くなる）。months の中身
+  // （このカードが実際に受け取った軸）が変わったときだけ選択を外すことで、同じ期間の
+  // まま裏で再取得された場合（data:changed 等）はユーザーの選択を保持する。
+  //
+  // lastMonthsKey の初期値は $effect の初回発火を待たずここで同期的に取る。$effect の
+  // 初回実行はマウント後の別ティックに回るため、null 始まりだと「マウント直後に
+  // クリックする」操作がその初回実行と競合し、選んだ直後に effect がまだ古い
+  // （未設定の）lastMonthsKey を見て選択を消してしまう（E2E で実際に踏んだ）。
+  function monthsKey(): string {
+    return (report?.months ?? []).join(',');
+  }
+  let lastMonthsKey = monthsKey();
+  $effect(() => {
+    const key = monthsKey();
+    if (key !== lastMonthsKey) {
+      lastMonthsKey = key;
+      selectedCategoryId = null;
+    }
+  });
 
   const expense = $derived(report?.expense ?? []);
   const income = $derived(report?.income ?? []);
@@ -116,13 +137,7 @@
     {#snippet children()}
       <h2>支出の内訳</h2>
       {#if report === null}
-        {#if loading}
-          <EmptyState title="読み込み中" hint="集計を取得しています" />
-        {:else if error}
-          <EmptyState title="読み込みに失敗しました" hint={error} />
-        {:else}
-          <EmptyState title="読み込み中" hint="集計を取得しています" />
-        {/if}
+        <ReportState {error} />
       {:else if expense.length === 0}
         <EmptyState title="支出がありません" hint="期間を広げるか取引を記録してください" />
       {:else}
@@ -159,13 +174,7 @@
     {#snippet children()}
       <h2>収入の内訳</h2>
       {#if report === null}
-        {#if loading}
-          <EmptyState title="読み込み中" hint="集計を取得しています" />
-        {:else if error}
-          <EmptyState title="読み込みに失敗しました" hint={error} />
-        {:else}
-          <EmptyState title="読み込み中" hint="集計を取得しています" />
-        {/if}
+        <ReportState {error} />
       {:else if income.length === 0}
         <EmptyState title="収入がありません" hint="期間を広げるか取引を記録してください" />
       {:else}
@@ -204,15 +213,19 @@
         <h2>カテゴリ別の推移</h2>
         <span data-testid="selected-category">{selectedName}</span>
       </div>
-      <div class="chart-box">
-        <Chart
-          type="line"
-          data={trendData}
-          options={trendOptions}
-          ariaLabel="カテゴリ別の月次推移"
-          testId="chart-category-trend"
-        />
-      </div>
+      {#if report === null}
+        <ReportState {error} />
+      {:else}
+        <div class="chart-box">
+          <Chart
+            type="line"
+            data={trendData}
+            options={trendOptions}
+            ariaLabel="カテゴリ別の月次推移"
+            testId="chart-category-trend"
+          />
+        </div>
+      {/if}
     {/snippet}
   </Card>
 </div>

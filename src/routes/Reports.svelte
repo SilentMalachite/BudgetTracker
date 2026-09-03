@@ -126,22 +126,22 @@
     <MonthlyTab
       report={store.monthly}
       {series}
-      year={new Date().getFullYear()}
+      year={store.currentYear}
       month={store.month}
-      loading={store.loading}
       error={store.error}
+      {seriesError}
     />
   {:else if tab === 'yearly'}
     <YearlyTab
       report={store.yearly}
+      year={store.year}
       onYearChange={(year) => void store.setYear(year)}
-      loading={store.loading}
       error={store.error}
     />
   {:else if tab === 'category'}
-    <ByCategoryTab report={store.byCategory} loading={store.loading} error={store.error} />
+    <ByCategoryTab report={store.byCategory} error={store.error} />
   {:else}
-    <TrendTab report={store.netWorth} loading={store.loading} error={store.error} />
+    <TrendTab report={store.netWorth} error={store.error} />
   {/if}
 </section>
 

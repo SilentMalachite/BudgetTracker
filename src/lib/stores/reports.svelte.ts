@@ -20,6 +20,12 @@ export type ReportsStore = {
   readonly preset: RangePreset;
   readonly year: number;
   readonly month: number;
+  /**
+   * 月次レポートを実際に取得した年（`today` の年で固定、`year` のように
+   * `setYear` で動かない）。UI 側が「今年」を独自に `new Date()` で読み直す
+   * 必要をなくすための、ストアが持つ唯一の正。
+   */
+  readonly currentYear: number;
   readonly loading: boolean;
   readonly error: string | null;
   setPreset(preset: RangePreset): Promise<void>;
@@ -40,6 +46,7 @@ export function createReportsStore(today: Date = new Date()): ReportsStore {
   let preset = $state<RangePreset>('last12');
   let year = $state(today.getFullYear());
   const month = today.getMonth() + 1;
+  const currentYear = today.getFullYear();
   let loading = $state(false);
   let error = $state<string | null>(null);
   let unlisten: UnlistenFn | null = null;
@@ -53,7 +60,7 @@ export function createReportsStore(today: Date = new Date()): ReportsStore {
     const { from, to } = presetRange(preset, today);
     try {
       const [nextMonthly, nextYearly, nextCategory, nextNetWorth] = await Promise.all([
-        reportMonthly(today.getFullYear(), month),
+        reportMonthly(currentYear, month),
         reportYearly(year),
         reportByCategory(from, to),
         reportNetWorthSeries(from, to),
@@ -106,6 +113,9 @@ export function createReportsStore(today: Date = new Date()): ReportsStore {
     },
     get month() {
       return month;
+    },
+    get currentYear() {
+      return currentYear;
     },
     get loading() {
       return loading;

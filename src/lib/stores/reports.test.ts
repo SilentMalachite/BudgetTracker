@@ -82,4 +82,23 @@ describe('reports store', () => {
     expect(store.error).toBe('invalid argument: month out of range: 13');
     await store.dispose();
   });
+
+  it('keeps currentYear fixed at the fetch year even after the yearly selector moves', async () => {
+    stubAll();
+    const store = createReportsStore(new Date(2026, 4, 15));
+
+    expect(store.currentYear).toBe(2026);
+
+    await store.setYear(1999);
+
+    // setYear moves `year` (what report_yearly is asked for); it must not move
+    // currentYear (what report_monthly is asked for) — they answer different
+    // questions ("which year is the yearly tab showing" vs. "what year is it
+    // actually right now"), and MonthlyTab/YearlyTab each need their own answer.
+    expect(store.currentYear).toBe(2026);
+    expect(store.year).toBe(1999);
+    expect(reportMonthly).toHaveBeenLastCalledWith(2026, 5);
+    expect(reportYearly).toHaveBeenLastCalledWith(1999);
+    await store.dispose();
+  });
 });
