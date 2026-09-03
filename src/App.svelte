@@ -98,7 +98,7 @@
       {:else if currentPath === '/budgets'}
         <Budgets />
       {:else if currentPath === '/recurring'}
-        <Recurring />
+        <Recurring {expansion} />
       {:else if currentPath === '/accounts'}
         <Accounts />
       {:else if currentPath === '/settings'}

@@ -59,12 +59,14 @@ test('a new rule appears in the list with its next occurrence', async ({ page })
 
   await page.addInitScript(
     (fixtures) => {
-      const state = { created: false };
+      const state = { created: false, expansions: 0 };
       const internals = (window as any).__TAURI_INTERNALS__ ?? {};
       const previous = internals.invoke;
       internals.invoke = async (command: string, args: any) => {
         switch (command) {
           case 'expand_due_recurring':
+            state.expansions += 1;
+            (window as any).__expansions = state.expansions;
             return { generated: 3, rules: [], skipped: [] };
           case 'list_accounts':
             return fixtures.accounts;
@@ -112,4 +114,50 @@ test('a new rule appears in the list with its next occurrence', async ({ page })
 
   await expect(page.getByTestId('recurring-row')).toHaveCount(1);
   await expect(page.getByTestId('recurring-next')).toHaveText('2026-02-27');
+
+  // 保存が「今すぐ生成されます」を守る: 起動時の 1 回に加えて保存直後にも展開する。
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__expansions))
+    .toBe(2);
+});
+
+test('a skipped rule is flagged in the banner and on its own row', async ({ page }) => {
+  await installReadyBootMock(page);
+
+  await page.addInitScript(
+    (fixtures) => {
+      const internals = (window as any).__TAURI_INTERNALS__ ?? {};
+      const previous = internals.invoke;
+      internals.invoke = async (command: string, args: any) => {
+        switch (command) {
+          case 'expand_due_recurring':
+            return {
+              generated: 0,
+              rules: [],
+              skipped: [{ rule_id: 1, rule_name: '家賃', reason: 'archived_account' }],
+            };
+          case 'list_accounts':
+            return fixtures.accounts;
+          case 'list_categories':
+            return fixtures.categories;
+          case 'list_recurring_rules':
+            return [{ rule: fixtures.rule, next_occurrence: '2026-02-27' }];
+          default:
+            return typeof previous === 'function' ? previous(command, args) : null;
+        }
+      };
+      (window as any).__TAURI_INTERNALS__ = internals;
+    },
+    { accounts: seededAccounts, categories: seededCategories, rule: createdRule },
+  );
+
+  await page.goto('/');
+
+  await expect(page.getByTestId('recurring-skip-banner')).toContainText('1 件');
+  await page.getByTestId('recurring-skip-banner').getByRole('link').click();
+
+  // どのルールがなぜ見送られたかが、その行で分かる (spec §5.4)。
+  const badge = page.getByTestId('recurring-skip-badge');
+  await expect(badge).toHaveCount(1);
+  await expect(badge).toContainText('口座がアーカイブ済み');
 });
