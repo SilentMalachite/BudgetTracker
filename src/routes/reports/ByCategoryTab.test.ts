@@ -39,8 +39,8 @@ function legendSwatchColor(categoryId: number): string {
 // 支出2件・収入1件。selectedCategoryId が null のときの visibleSeries は上位5件の
 // 支出全部 (ここでは食費・交通費の2件とも)。交通費 (category_id 3) を選ぶと
 // visibleSeries が1件に絞られ、series 配列内での位置が [1件目] に変わる。
-// ByCategoryTab.svelte:259-269 の categoryColor マップが category_id ではなく配列の
-// 位置で色を割り当てていた場合、この絞り込みで凡例と推移線の色がずれる。
+// ByCategoryTab.svelte の categoryColor マップ (category_id → 色) が配列の位置で
+// 色を割り当てていた場合、この絞り込みで凡例と推移線の色がずれる。
 const report: CategoryReport = {
   months: ['2026-04', '2026-05'],
   income: [{ category_id: 2, name: '給与', type: 'income', amount: 640_000 }],
@@ -55,9 +55,54 @@ const report: CategoryReport = {
   ],
 };
 
+// FIX 3 用: 軸 (months) が別期間になり、選んでいたカテゴリ (交通費, id 3) がもう
+// 存在しない期間。選択を引きずると visibleSeries が空になり selectedName が "—" の
+// まま取り残される（凡例からもそのボタンが消えるので外す手段が無い）。
+const otherRangeReport: CategoryReport = {
+  months: ['2025-01', '2025-02'],
+  income: [],
+  expense: [{ category_id: 5, name: '娯楽費', type: 'expense', amount: 4_000 }],
+  series: [{ category_id: 5, name: '娯楽費', type: 'expense', points: [2_000, 2_000] }],
+};
+
 describe('ByCategoryTab', () => {
+  it('resets the selected category when the report months axis changes', async () => {
+    const { rerender } = render(ByCategoryTab, { props: { report, error: null } });
+
+    screen.getByTestId('legend-category-3').click();
+    await Promise.resolve();
+    expect(screen.getByTestId('selected-category').textContent).toBe('交通費');
+
+    // 期間 (プリセット) を変えて新しいレポートが届いた想定。
+    await rerender({ report: otherRangeReport });
+
+    expect(screen.getByTestId('selected-category').textContent).toBe('支出上位5カテゴリ');
+  });
+
+  it('keeps the selection when the same-range report is refetched (e.g. a data:changed reload)', async () => {
+    const { rerender } = render(ByCategoryTab, { props: { report, error: null } });
+
+    screen.getByTestId('legend-category-3').click();
+    await Promise.resolve();
+    expect(screen.getByTestId('selected-category').textContent).toBe('交通費');
+
+    // 同じ months のまま中身の金額だけ変わって再取得された想定（新しいオブジェクト
+    // 参照だが軸は同じで、選んでいたカテゴリ(3)もまだ存在する）。ユーザーの選択を
+    // 裏で勝手に外してはいけない。
+    await rerender({
+      report: {
+        ...report,
+        expense: report.expense.map((a) =>
+          a.category_id === 1 ? { ...a, amount: a.amount + 1 } : a,
+        ),
+      },
+    });
+
+    expect(screen.getByTestId('selected-category').textContent).toBe('交通費');
+  });
+
   it('colors a category the same in the legend and the trend line, before and after narrowing', async () => {
-    render(ByCategoryTab, { props: { report, loading: false, error: null } });
+    render(ByCategoryTab, { props: { report, error: null } });
 
     // 絞り込み前: 食費・交通費の両方が推移に出ている。凡例の色と一致すること。
     let trend = trendChartData();

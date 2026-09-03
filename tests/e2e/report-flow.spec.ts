@@ -97,6 +97,18 @@ test('a failed initial load shows the error state, not a false-empty state', asy
   // reject, so all four tabs stay in the null/error branch. It fails against the
   // pre-fix components exactly as described above (see task-7-report.md for the
   // git-show evidence) and passes against the current ones.
+  //
+  // Whole-branch review round: the same collapse was found on 5 more cards that this
+  // test didn't look at (支出/収入 Top5, and the three chart-only cards: 月別収支,
+  // 月別の収入 / 支出, カテゴリ別の推移). All four tab components now share one
+  // ReportState component for this instead of five separately-written branches, so
+  // this test checks all nine cards, not just the four Task 6's fix round happened to
+  // touch. It also exercises the one place the fix has a trap: MonthlyTab's 月別収支
+  // chart is fed by `series` (a separate fetch from the other four reports), and its
+  // failure lands in `seriesError`, not `store.error` — `monthly_series` is not
+  // rejected below, so that one card must show "読み込み中" (its own fetch is still
+  // fine), not "読み込みに失敗しました" (which would mean MonthlyTab wired the wrong
+  // error prop into it).
   await installReadyBootMock(page);
 
   const failureMessage = 'report_monthly failed';
@@ -124,6 +136,32 @@ test('a failed initial load shows the error state, not a false-empty state', asy
   await expect(monthlyCompareCard.getByText('読み込みに失敗しました')).toBeVisible();
   await expect(monthlyCompareCard.getByText('読み込み中')).toHaveCount(0);
 
+  // 支出/収入 Top5: レビューで見つかった、直していなかった5枚のうちの2枚。前は
+  // `!report || report.top_expense.length === 0` が report===null でも真になり、
+  // 「支出がありません」という偽の空表示だった。
+  const topExpenseCard = page
+    .locator('.card')
+    .filter({ has: page.getByRole('heading', { name: '支出 Top5' }) });
+  const topIncomeCard = page
+    .locator('.card')
+    .filter({ has: page.getByRole('heading', { name: '収入 Top5' }) });
+  await expect(topExpenseCard.getByText('読み込みに失敗しました')).toBeVisible();
+  await expect(topExpenseCard.getByText('支出がありません')).toHaveCount(0);
+  await expect(topIncomeCard.getByText('読み込みに失敗しました')).toBeVisible();
+  await expect(topIncomeCard.getByText('収入がありません')).toHaveCount(0);
+
+  // 月別収支のグラフカード: 残り3枚のうちの1枚で、唯一 store.error ではなく
+  // seriesError を読む（monthlySeries は Reports.svelte が別に取得する）。この
+  // テストは report_monthly だけを失敗させ monthly_series は失敗させていないので、
+  // 「読み込みに失敗しました」ではなく「読み込み中」のままのはず — もしこのカードが
+  // 誤って store.error を配線されていたら「読み込みに失敗しました」に変わり、ここで
+  // 落ちる。
+  const monthlyChartCard = page
+    .locator('.card')
+    .filter({ has: page.getByRole('heading', { name: '月別収支' }) });
+  await expect(monthlyChartCard.getByText('読み込み中')).toBeVisible();
+  await expect(monthlyChartCard.getByText('読み込みに失敗しました')).toHaveCount(0);
+
   // 年次タブも同じ構造で同じバグを持っていた。
   await page.getByTestId('reports-tab-yearly').click();
   const yearlySummaryCard = page
@@ -131,6 +169,15 @@ test('a failed initial load shows the error state, not a false-empty state', asy
     .filter({ has: page.getByRole('heading', { name: '年間サマリー' }) });
   await expect(yearlySummaryCard.getByText('読み込みに失敗しました')).toBeVisible();
   await expect(yearlySummaryCard.getByText('読み込み中')).toHaveCount(0);
+
+  // 月別の収入 / 支出のグラフカード: 残り3枚のうちの2枚目。report_yearly 自体は
+  // 拒否していないが、store.load() は4本を1つの Promise.all で待つので
+  // report_monthly の失敗で yearly も null のまま止まり、このカードも失敗表示になる。
+  const yearlyChartCard = page
+    .locator('.card')
+    .filter({ has: page.getByRole('heading', { name: '月別の収入 / 支出' }) });
+  await expect(yearlyChartCard.getByText('読み込みに失敗しました')).toBeVisible();
+  await expect(yearlyChartCard.getByText('読み込み中')).toHaveCount(0);
 
   // カテゴリ別タブ: 前は「支出がありません」「収入がありません」という偽の空表示だった。
   await page.getByTestId('reports-tab-category').click();
@@ -144,6 +191,14 @@ test('a failed initial load shows the error state, not a false-empty state', asy
   await expect(expenseCard.getByText('支出がありません')).toHaveCount(0);
   await expect(incomeCard.getByText('読み込みに失敗しました')).toBeVisible();
   await expect(incomeCard.getByText('収入がありません')).toHaveCount(0);
+
+  // カテゴリ別の推移のグラフカード: 残り3枚のうち最後の1枚。レビューが「一番わかり
+  // やすい例」と呼んだカード — 同じファイルの上2枚 (支出/収入の内訳) は tri-state を
+  // 持つのに、これだけ何も持たず Chart を無条件に描いていた。
+  const categoryTrendCard = page
+    .locator('.card')
+    .filter({ has: page.getByRole('heading', { name: 'カテゴリ別の推移' }) });
+  await expect(categoryTrendCard.getByText('読み込みに失敗しました')).toBeVisible();
 
   // トレンドタブ: 前は「データがありません」という偽の空表示だった。
   await page.getByTestId('reports-tab-trend').click();
