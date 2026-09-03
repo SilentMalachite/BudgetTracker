@@ -126,6 +126,8 @@ test('a skipped rule is flagged in the banner and on its own row', async ({ page
 
   await page.addInitScript(
     (fixtures) => {
+      // 参照先を直すまでは見送られ続け、直したあとの展開では見送りが消える。
+      const state = { repaired: false };
       const internals = (window as any).__TAURI_INTERNALS__ ?? {};
       const previous = internals.invoke;
       internals.invoke = async (command: string, args: any) => {
@@ -134,8 +136,13 @@ test('a skipped rule is flagged in the banner and on its own row', async ({ page
             return {
               generated: 0,
               rules: [],
-              skipped: [{ rule_id: 1, rule_name: '家賃', reason: 'archived_account' }],
+              skipped: state.repaired
+                ? []
+                : [{ rule_id: 1, rule_name: '家賃', reason: 'archived_account' }],
             };
+          case 'update_recurring_rule':
+            state.repaired = true;
+            return fixtures.rule;
           case 'list_accounts':
             return fixtures.accounts;
           case 'list_categories':
@@ -160,4 +167,9 @@ test('a skipped rule is flagged in the banner and on its own row', async ({ page
   const badge = page.getByTestId('recurring-skip-badge');
   await expect(badge).toHaveCount(1);
   await expect(badge).toContainText('口座がアーカイブ済み');
+
+  // 参照先を直したら、その場でバッジが消える。再起動まで「壊れている」と出し続けない。
+  await page.getByRole('button', { name: '編集' }).click();
+  await page.getByTestId('recurring-save').click();
+  await expect(badge).toHaveCount(0);
 });
