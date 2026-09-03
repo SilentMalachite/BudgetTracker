@@ -435,7 +435,8 @@ fn import_json() {
             budgets: 4,
             warnings: vec![
                 "skipped duplicate category: 食費".into(),
-                "skipped duplicate recurring rule: 家賃".into(),
+                "merged duplicate recurring rule: 家賃 (last generated 2026-04-25 -> 2026-05-25)"
+                    .into(),
             ],
         },
     );

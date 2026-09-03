@@ -6,6 +6,6 @@
   "budgets": 4,
   "warnings": [
     "skipped duplicate category: 食費",
-    "skipped duplicate recurring rule: 家賃"
+    "merged duplicate recurring rule: 家賃 (last generated 2026-04-25 -> 2026-05-25)"
   ]
 }

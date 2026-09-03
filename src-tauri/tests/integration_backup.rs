@@ -856,7 +856,7 @@ fn append_importing_a_snapshot_into_its_own_db_keeps_one_recurring_rule() {
         result
             .warnings
             .iter()
-            .any(|w| w == "skipped duplicate recurring rule: 家賃"),
+            .any(|w| w == "merged duplicate recurring rule: 家賃"),
         "{:?}",
         result.warnings
     );
@@ -1014,7 +1014,7 @@ fn append_importing_a_transfer_rule_into_its_own_db_keeps_one_rule() {
         result
             .warnings
             .iter()
-            .any(|w| w == "skipped duplicate recurring rule: 振替"),
+            .any(|w| w == "merged duplicate recurring rule: 振替"),
         "{:?}",
         result.warnings
     );
@@ -1054,5 +1054,187 @@ fn append_import_keeps_a_transfer_rule_that_differs_only_by_destination() {
               ORDER BY a.name"
         ),
         vec!["銀行A", "銀行B"]
+    );
+}
+
+/// マージ後のルールの可変フィールド。行が 1 本であることを先に確かめてから読む。
+fn merged_rule_state(conn: &Connection) -> (Option<String>, Option<String>, i64, String) {
+    conn.query_row(
+        "SELECT last_generated_on, ends_on, active, description FROM recurring_rules",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )
+    .unwrap()
+}
+
+/// 同一性が一致する行を「飛ばす」だけだと、取り込み元が持っていた新しい
+/// `last_generated_on` が捨てられる。watermark が巻き戻った分だけ、相手側が
+/// すでに生成済みの発生日をこちらでもう一度生成する = 二重に金額が入る。
+/// 同一性はそのままに、watermark だけは新しい方を採る。
+#[test]
+fn append_import_merges_the_later_last_generated_on() {
+    let mut target = db_with_subscription_rule("食費");
+    target
+        .execute(
+            "UPDATE recurring_rules SET last_generated_on = '2026-05-25'",
+            [],
+        )
+        .unwrap();
+    let source = db_with_subscription_rule("食費");
+    source
+        .execute(
+            "UPDATE recurring_rules SET last_generated_on = '2026-07-25'",
+            [],
+        )
+        .unwrap();
+    let snapshot = backup::export_snapshot_json(&source).unwrap();
+
+    let result = backup::import_snapshot_json(&mut target, &snapshot, "append").unwrap();
+
+    assert_eq!(count(&target, "recurring_rules"), 1);
+    // マージは新規行を作らないので、サマリの件数には出ない (警告に出る)。
+    assert_eq!(result.recurring_rules, 0);
+    let (last_generated_on, _, _, _) = merged_rule_state(&target);
+    assert_eq!(last_generated_on.as_deref(), Some("2026-07-25"));
+    assert!(
+        result.warnings.iter().any(|w| w
+            == "merged duplicate recurring rule: サブスク (last generated 2026-05-25 -> 2026-07-25)"),
+        "{:?}",
+        result.warnings
+    );
+
+    // 実害はここ: 2026-06-25 と 2026-07-25 は再生成されない。
+    let expansion = recurring_cmd::expand_due_recurring_for_conn(
+        &target,
+        NaiveDate::from_ymd_opt(2026, 8, 25).unwrap(),
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(expansion.generated, 1);
+    assert_eq!(occurred_dates(&target), vec!["2026-08-25"]);
+}
+
+/// 逆向き。取り込み側の watermark の方が新しければ、そちらが残る。
+/// 古いスナップショットを追記しても watermark は巻き戻らない。
+#[test]
+fn append_import_keeps_the_target_last_generated_on_when_it_is_later() {
+    let mut target = db_with_subscription_rule("食費");
+    target
+        .execute(
+            "UPDATE recurring_rules SET last_generated_on = '2026-07-25'",
+            [],
+        )
+        .unwrap();
+    let source = db_with_subscription_rule("食費");
+    source
+        .execute(
+            "UPDATE recurring_rules SET last_generated_on = '2026-05-25'",
+            [],
+        )
+        .unwrap();
+    let snapshot = backup::export_snapshot_json(&source).unwrap();
+
+    let result = backup::import_snapshot_json(&mut target, &snapshot, "append").unwrap();
+
+    assert_eq!(count(&target, "recurring_rules"), 1);
+    assert_eq!(result.recurring_rules, 0);
+    let (last_generated_on, _, _, _) = merged_rule_state(&target);
+    assert_eq!(last_generated_on.as_deref(), Some("2026-07-25"));
+    // watermark が動いていないので、警告に移動は書かれない。
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w == "merged duplicate recurring rule: サブスク"),
+        "{:?}",
+        result.warnings
+    );
+
+    let expansion = recurring_cmd::expand_due_recurring_for_conn(
+        &target,
+        NaiveDate::from_ymd_opt(2026, 8, 25).unwrap(),
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(expansion.generated, 1);
+    assert_eq!(occurred_dates(&target), vec!["2026-08-25"]);
+}
+
+/// `last_generated_on` が NULL は「一度も生成していない」なので、日付が入った側に
+/// 負ける。ここを NULL 優先にすると、相手が生成済みの発生日を starts_on まで遡って
+/// 全部生成し直す。
+#[test]
+fn append_import_adopts_the_incoming_checkpoint_when_the_target_never_generated() {
+    let mut target = db_with_subscription_rule("食費");
+    let source = db_with_subscription_rule("食費");
+    source
+        .execute(
+            "UPDATE recurring_rules SET last_generated_on = '2026-07-25'",
+            [],
+        )
+        .unwrap();
+    let snapshot = backup::export_snapshot_json(&source).unwrap();
+
+    let result = backup::import_snapshot_json(&mut target, &snapshot, "append").unwrap();
+
+    assert_eq!(count(&target, "recurring_rules"), 1);
+    let (last_generated_on, _, _, _) = merged_rule_state(&target);
+    assert_eq!(last_generated_on.as_deref(), Some("2026-07-25"));
+    assert!(
+        result.warnings.iter().any(
+            |w| w == "merged duplicate recurring rule: サブスク (last generated never -> 2026-07-25)"
+        ),
+        "{:?}",
+        result.warnings
+    );
+
+    let expansion = recurring_cmd::expand_due_recurring_for_conn(
+        &target,
+        NaiveDate::from_ymd_opt(2026, 8, 25).unwrap(),
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(expansion.generated, 1);
+    assert_eq!(occurred_dates(&target), vec!["2026-08-25"]);
+}
+
+/// `ends_on` / `active` / `description` は取り込み側が勝つ。追記は「今の正」に足す
+/// 操作で、バックアップは普通それより古い。古い側を採ると、ユーザーが自分で終了
+/// させた・停止したルールがそのまま復活して毎月生成を再開してしまう。
+#[test]
+fn append_import_keeps_the_target_ends_on_active_and_description() {
+    let mut target = db_with_subscription_rule("食費");
+    target
+        .execute(
+            "UPDATE recurring_rules
+                SET ends_on = NULL, active = 1, description = '継続中'",
+            [],
+        )
+        .unwrap();
+    let source = db_with_subscription_rule("食費");
+    source
+        .execute(
+            "UPDATE recurring_rules
+                SET ends_on = '2026-06-30', active = 0, description = '古い控え'",
+            [],
+        )
+        .unwrap();
+    let snapshot = backup::export_snapshot_json(&source).unwrap();
+
+    let result = backup::import_snapshot_json(&mut target, &snapshot, "append").unwrap();
+
+    assert_eq!(count(&target, "recurring_rules"), 1);
+    assert_eq!(result.recurring_rules, 0);
+    let (_, ends_on, active, description) = merged_rule_state(&target);
+    assert_eq!(ends_on, None);
+    assert_eq!(active, 1);
+    assert_eq!(description, "継続中");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w == "merged duplicate recurring rule: サブスク"),
+        "{:?}",
+        result.warnings
     );
 }
