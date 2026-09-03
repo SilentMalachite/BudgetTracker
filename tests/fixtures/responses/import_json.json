@@ -1,9 +1,11 @@
 {
   "categories": 12,
   "accounts": 3,
+  "recurring_rules": 2,
   "transactions": 248,
   "budgets": 4,
   "warnings": [
-    "skipped duplicate category: 食費"
+    "skipped duplicate category: 食費",
+    "skipped duplicate recurring rule: 家賃"
   ]
 }

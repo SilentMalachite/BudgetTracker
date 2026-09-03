@@ -14,6 +14,7 @@ describe('backup api', () => {
     invokeMock.mockResolvedValueOnce({
       categories: 0,
       accounts: 0,
+      recurring_rules: 0,
       transactions: 0,
       budgets: 0,
       warnings: [],

@@ -5,6 +5,7 @@ export type ImportMode = 'overwrite' | 'append';
 export type ImportResult = {
   categories: number;
   accounts: number;
+  recurring_rules: number;
   transactions: number;
   budgets: number;
   warnings: string[];

@@ -1,10 +1,12 @@
 use budget_tracker_lib::commands::backup;
+use budget_tracker_lib::commands::recurring as recurring_cmd;
 use budget_tracker_lib::domain::account::AccountKind;
 use budget_tracker_lib::domain::category::CategoryType;
 use budget_tracker_lib::domain::ledger::TxType;
 use budget_tracker_lib::error::AppError;
 use budget_tracker_lib::infra::migrations;
 use budget_tracker_lib::infra::repo::{account_repo, category_repo, transaction_repo};
+use chrono::NaiveDate;
 use rusqlite::{params, Connection};
 
 const NOW: &str = "2026-05-25T00:00:00+00:00";
@@ -112,6 +114,7 @@ fn export_then_overwrite_import_restores_state() {
     assert!(result.warnings.is_empty());
     assert_eq!(result.categories, 1);
     assert_eq!(result.accounts, 1);
+    assert_eq!(result.recurring_rules, 1);
     assert_eq!(result.transactions, 1);
     assert_eq!(result.budgets, 1);
 
@@ -773,4 +776,51 @@ fn overwrite_import_restores_history_on_archived_category() {
     assert_eq!(result.transactions, 1);
     assert_eq!(result.budgets, 1);
     assert_eq!(count(&target, "recurring_rules"), 1);
+}
+
+fn occurred_dates(conn: &Connection) -> Vec<String> {
+    conn.prepare("SELECT occurred_on FROM transactions ORDER BY occurred_on")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect()
+}
+
+/// 追記インポートで定期取引ルールが増えると、以後の展開が毎月二重に取引を書く。
+/// 一度きりの重複ではなく永続的な二重課金になるので、カテゴリと同じく重複は
+/// 飛ばして警告する。
+#[test]
+fn append_importing_a_snapshot_into_its_own_db_keeps_one_recurring_rule() {
+    let mut conn = seeded_db();
+    let snapshot = backup::export_snapshot_json(&conn).unwrap();
+
+    let result = backup::import_snapshot_json(&mut conn, &snapshot, "append").unwrap();
+
+    assert_eq!(count(&conn, "recurring_rules"), 1);
+    // 何も入らなかったことがサマリにも出る。
+    assert_eq!(result.recurring_rules, 0);
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w == "skipped duplicate recurring rule: 家賃"),
+        "{:?}",
+        result.warnings
+    );
+
+    // 取り込み後の展開は各日付を 1 回だけ生成する。
+    conn.execute("DELETE FROM transactions", []).unwrap();
+    let expansion = recurring_cmd::expand_due_recurring_for_conn(
+        &conn,
+        NaiveDate::from_ymd_opt(2026, 8, 1).unwrap(),
+        NOW,
+    )
+    .unwrap();
+
+    assert_eq!(expansion.generated, 3);
+    assert_eq!(
+        occurred_dates(&conn),
+        vec!["2026-05-25", "2026-06-25", "2026-07-25"]
+    );
 }

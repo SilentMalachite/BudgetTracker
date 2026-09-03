@@ -191,6 +191,7 @@ pub struct ImportArgs {
 pub struct ImportResult {
     pub categories: u32,
     pub accounts: u32,
+    pub recurring_rules: u32,
     pub transactions: u32,
     pub budgets: u32,
     pub warnings: Vec<String>,
@@ -362,6 +363,57 @@ fn insert_category(
     }
 }
 
+/// The rule already present in the target database that `rule` would duplicate,
+/// if any. Append mode has to find it *before* inserting: unlike `categories`,
+/// `recurring_rules` carries no UNIQUE constraint, so the insert would simply
+/// succeed and leave two identical schedules behind — and every later expansion
+/// would then write each occurrence twice, for good.
+///
+/// The account is matched through the account *row* (name / kind / currency)
+/// rather than through `account_id`. Append inserts accounts unconditionally,
+/// so importing a backup into the database it came from creates a second
+/// account row and the incoming rule points at that copy; comparing raw ids
+/// would never match. Everything else is compared exactly as the insert writes
+/// it, including the same fallbacks.
+fn existing_recurring_rule_id(
+    tx: &rusqlite::Transaction<'_>,
+    rule: &serde_json::Value,
+    account_id: i64,
+) -> AppResult<Option<i64>> {
+    tx.query_row(
+        "SELECT r.id
+           FROM recurring_rules r
+           JOIN accounts a ON a.id = r.account_id
+           JOIN accounts incoming ON incoming.id = ?1
+          WHERE r.name = ?2
+            AND r.type = ?3
+            AND r.amount = ?4
+            AND r.frequency = ?5
+            AND r.day_of_month IS ?6
+            AND r.day_of_week IS ?7
+            AND r.starts_on = ?8
+            AND a.name = incoming.name
+            AND a.kind = incoming.kind
+            AND a.currency = incoming.currency
+          LIMIT 1",
+        params![
+            account_id,
+            value_str(rule, "name").unwrap_or(""),
+            value_str(rule, "type").unwrap_or("expense"),
+            value_i64(rule, "amount").unwrap_or(0),
+            value_str(rule, "frequency").unwrap_or("monthly"),
+            value_i64(rule, "day_of_month"),
+            value_i64(rule, "day_of_week"),
+            value_str(rule, "starts_on").unwrap_or("1970-01-01"),
+        ],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(AppError::Db)
+}
+
+/// `Some((id, inserted))`: the id transactions should point at, and whether a
+/// new row was actually written (an append that hit an existing rule reuses it).
 fn insert_recurring_rule(
     tx: &rusqlite::Transaction<'_>,
     rule: &serde_json::Value,
@@ -369,7 +421,7 @@ fn insert_recurring_rule(
     accounts: &HashMap<i64, i64>,
     categories: &HashMap<i64, i64>,
     warnings: &mut Vec<String>,
-) -> AppResult<Option<i64>> {
+) -> AppResult<Option<(i64, bool)>> {
     let old_account = require_i64(rule, "account_id", "recurring rule")?;
     let Some(account_id) = resolve_required(
         accounts,
@@ -426,10 +478,18 @@ fn insert_recurring_rule(
                 value_i64(rule, "active").unwrap_or(1),
             ],
         )?;
-        Ok(Some(
+        Ok(Some((
             value_i64(rule, "id").unwrap_or_else(|| tx.last_insert_rowid()),
-        ))
+            true,
+        )))
     } else {
+        if let Some(existing_id) = existing_recurring_rule_id(tx, rule, account_id)? {
+            warnings.push(format!(
+                "skipped duplicate recurring rule: {}",
+                value_str(rule, "name").unwrap_or("")
+            ));
+            return Ok(Some((existing_id, false)));
+        }
         tx.execute(
             "INSERT INTO recurring_rules(name, type, amount, account_id, counter_account_id,
                                          category_id, description, frequency, day_of_month,
@@ -452,7 +512,7 @@ fn insert_recurring_rule(
                 value_i64(rule, "active").unwrap_or(1),
             ],
         )?;
-        Ok(Some(tx.last_insert_rowid()))
+        Ok(Some((tx.last_insert_rowid(), true)))
     }
 }
 
@@ -1091,6 +1151,7 @@ fn apply_snapshot(
     let mut warnings = Vec::new();
     let mut category_count = 0u32;
     let mut account_count = 0u32;
+    let mut recurring_rule_count = 0u32;
     let mut transaction_count = 0u32;
     let mut budget_count = 0u32;
     let mut account_map = HashMap::new();
@@ -1133,10 +1194,13 @@ fn apply_snapshot(
 
     for rule in &snap.recurring_rules {
         let old_id = require_i64(rule, "id", "recurring rule")?;
-        if let Some(new_id) =
+        if let Some((new_id, inserted)) =
             insert_recurring_rule(&tx, rule, mode, &account_map, &category_map, &mut warnings)?
         {
             recurring_map.insert(old_id, new_id);
+            if inserted {
+                recurring_rule_count += 1;
+            }
         }
     }
 
@@ -1176,6 +1240,7 @@ fn apply_snapshot(
     Ok(ImportResult {
         categories: category_count,
         accounts: account_count,
+        recurring_rules: recurring_rule_count,
         transactions: transaction_count,
         budgets: budget_count,
         warnings,
