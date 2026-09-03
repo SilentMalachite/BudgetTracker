@@ -294,16 +294,72 @@ CREATE TABLE app_meta (
 
 ### 5.4 定期取引
 
-定期取引の展開と Recurring ルートは **Phase 5**。
+定期取引の展開と Recurring ルートは **Phase 5a**。
 
-- **展開タイミング**: アプリ起動時に Rust 側で `expand_due_recurring()` を実行
-  1. `recurring_rules WHERE active=1` を取得
-  2. 各ルールについて `last_generated_on` 〜 `今日` の間に発生すべき日付を計算
-  3. 該当日付ぶんの transactions を一括 INSERT（recurring_id を紐づけ）
-  4. `last_generated_on` を更新
-- **冪等性**: アプリ連続起動でも二重生成されない
+#### 展開の実行位置
+
+`boot()` の完了後、フロントエンドから `expand_due_recurring()` を明示的に invoke する。
+`setup()` 内では実行しない。理由:
+
+- 生成件数とスキップ理由を UI に返せる（`setup()` からは UI に伝える経路がない）
+- 展開の失敗が起動そのものを止めない
+- Recovery 状態では自然に呼ばれない
+- コマンド層のテストから直接叩ける
+
+処理の流れ:
+
+1. `recurring_rules WHERE active = 1` を取得
+2. 各ルールについて `(last_generated_on, 今日]` に発生すべき日付を計算
+3. 該当日付ぶんの transactions を一括 INSERT（`recurring_id` を紐づけ）
+4. `last_generated_on` を更新
+
+全ルールを単一トランザクションで処理する。
+
+#### 日付生成の規則
+
+日付列挙は `domain/recurring.rs` の純粋関数に閉じ込める（時計も DB も参照しない）。
+
+- **窓は左開右閉** `(last_generated_on, today]`。これが冪等性の本体で、
+  `occurrences(a, c) == occurrences(a, b) ++ occurrences(b, c)` が成り立つ
+- **`last_generated_on` が NULL** のときは `starts_on` から遡って全件生成する。
+  「先月分の家賃を後から登録する」が意図通り動く。意図しない大量生成は、
+  作成フォームが `preview_recurring_occurrences` で件数を事前表示して防ぐ
+- **月末クランプ**: `day_of_month` がその月に存在しない場合は末日に寄せる
+  （31 → 2月は 28/29、4月は 30）。yearly の 2/29 も平年は 2/28。
+  スキップも翌月繰り越しもしない
+- **yearly の月**: `recurring_rules` に月カラムが無いため `starts_on` の月を使う
+- **weekly の `day_of_week`**: 必須（`0` = 日曜）。NULL はコマンド層で拒否
+- **ルールの削除**: §4.2 の論理削除方針に従い `active = 0`。行は消さない
+
+#### アーカイブ済み参照の扱い
+
+ルールが参照する口座・カテゴリが後からアーカイブされた場合、**そのルールだけ展開を
+見送り、`last_generated_on` も進めない**。展開結果に理由つきで返し、Recurring 画面が
+警告バッジを出す。ユーザーが参照先を直せば、次回展開で見送った期間が遡って埋まる。
+アーカイブされたカテゴリに取引が積み上がって予算進捗から消えるのを防ぐため。
+
+検証には `domain/ledger.rs` の `assert_account_writable` / `assert_category_matches_tx`
+を `AllowedArchivedRefs::none()` で再利用する。
+
+#### コマンド
+
+| コマンド | 役割 |
+|---|---|
+| `list_recurring_rules(include_inactive)` | 一覧。各行に次回発生日を同梱 |
+| `create_recurring_rule` / `update_recurring_rule` | ルール CRUD |
+| `set_recurring_rule_active(id, active)` | 有効 / 停止 |
+| `preview_recurring_occurrences(draft, limit)` | 保存前の発生日プレビュー（生成しない） |
+| `expand_due_recurring()` | 起動時展開 |
+
+`expand_due_recurring()` の戻り値は生成総数・ルール別内訳・スキップ一覧
+（理由つき）を含み、`tests/fixtures/responses/` の契約フィクスチャで固定する。
+
+#### その他
+
 - **「次回予定」表示**: 生成は行わず、UI で次回発生日をプレビューのみ
 - **ルール変更時の挙動**: 過去生成済みの取引はそのまま、未来の生成のみ新ルールで
+- **インデックス**: ルール別の生成履歴を引くため `transactions(recurring_id)` を追加する
+  （`V005__recurring_transaction_index.sql`）。`recurring_rules` 自体は V001 で作成済み
 
 ### 5.5 口座・資産管理
 
@@ -329,14 +385,14 @@ CREATE TABLE app_meta (
 
 ### 5.6 分析レポート
 
-4タブ UI（月次 / 年次 / カテゴリ別 / トレンド）と Recurring / Reports ルートは **Phase 5**。
+4タブ UI（月次 / 年次 / カテゴリ別 / トレンド）と Reports ルートは **Phase 5b**（Recurring ルートは §5.4 の Phase 5a）。
 
 Phase 4 時点で実装済みの集計コマンド:
 
 - `monthly_summary(year, month)` — 指定月の収入 / 支出 / 差額（振替は除外）
 - `monthly_series(months)` — 当月を含む直近 N ヶ月（歯抜け月は 0 埋め）
 
-Phase 5 で追加する4タブ:
+Phase 5b で追加する4タブ:
 
 ```
 タブ: [月次] [年次] [カテゴリ別] [トレンド]
@@ -359,7 +415,7 @@ Phase 5 で追加する4タブ:
 - 移動平均 (3ヶ月)
 ```
 
-- **集計クエリは Rust 側**: 現行は `monthly_summary` / `monthly_series`。Phase 5 で `report_yearly(year)` / `report_by_category(range)` / `report_net_worth_series(range)` を追加する
+- **集計クエリは Rust 側**: 現行は `monthly_summary` / `monthly_series`。Phase 5b で `report_yearly(year)` / `report_by_category(range)` / `report_net_worth_series(range)` を追加する
 - **エクスポート**: JSON は現行。Excel は Phase 6 以降。PDF出力は MVP 対象外
 
 ## 6. セキュリティ
@@ -431,7 +487,8 @@ Phase 5 で追加する4タブ:
 | 2 | 取引 CRUD + カテゴリ + ダッシュボード | 既存HTMLの主要機能が Tauri アプリ上で再現 |
 | 3 | 複数口座 + 振替 | 口座追加、振替取引、口座別残高表示 |
 | 4 | 予算管理 | 予算設定、進捗バー、超過アラート |
-| 5 | 定期取引 + 分析レポート強化 | 起動時自動展開、レポート4タブ |
+| 5a | 定期取引 | 起動時自動展開、Recurring ルート |
+| 5b | 分析レポート強化 | レポート4タブ |
 
 各フェーズの完了時に動作確認 → 次フェーズへ進む。CI緑化と E2E テスト最低1本を各フェーズの完了条件とする。
 
@@ -458,3 +515,4 @@ Phase 5 で追加する4タブ:
 - 2026-08-29: Phase 4 レビューに合わせ、未実装機能とパス/鍵の現行実装を明記
 - 2026-08-29: §11 から SQLCipher 平文フォールバックを削除し、復号/鍵不一致時の Recovery 手順を明記
 - 2026-09-03: §11 に SQLCipher 形式固定 (`cipher_compatibility = 4`)、破損鍵の退避、quarantine 時の journal 同時退避を追記
+- 2026-09-03: Phase 5 を 5a (定期取引) / 5b (レポート強化) に分割し、§5.4 に展開の実行位置・日付生成規則・アーカイブ参照時の扱い・コマンド一覧を確定
