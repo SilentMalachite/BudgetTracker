@@ -1,0 +1,29 @@
+[
+  {
+    "id": 1,
+    "name": "食費",
+    "type": "expense",
+    "color": "#f5576c",
+    "icon": "🍚",
+    "display_order": 0,
+    "archived_at": null
+  },
+  {
+    "id": 2,
+    "name": "給与",
+    "type": "income",
+    "color": "#4facfe",
+    "icon": null,
+    "display_order": 1,
+    "archived_at": null
+  },
+  {
+    "id": 3,
+    "name": "旧・交際費",
+    "type": "expense",
+    "color": null,
+    "icon": null,
+    "display_order": 2,
+    "archived_at": "2026-02-28T15:00:00.000000+00:00"
+  }
+]

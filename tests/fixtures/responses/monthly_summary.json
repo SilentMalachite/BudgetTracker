@@ -1,0 +1,19 @@
+{
+  "income": 320000,
+  "expense": 1280,
+  "net": 318720,
+  "by_category": [
+    {
+      "category_id": 1,
+      "name": "食費",
+      "type": "expense",
+      "amount": 1280
+    },
+    {
+      "category_id": 2,
+      "name": "給与",
+      "type": "income",
+      "amount": 320000
+    }
+  ]
+}

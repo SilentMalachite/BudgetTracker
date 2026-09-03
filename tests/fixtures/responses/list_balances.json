@@ -1,0 +1,32 @@
+{
+  "accounts": [
+    {
+      "account_id": 1,
+      "name": "財布",
+      "kind": "cash",
+      "initial_balance": 5000,
+      "balance": 33720,
+      "archived_at": null,
+      "display_order": 0
+    },
+    {
+      "account_id": 2,
+      "name": "給与振込口座",
+      "kind": "bank",
+      "initial_balance": 250000,
+      "balance": 540000,
+      "archived_at": null,
+      "display_order": 1
+    },
+    {
+      "account_id": 3,
+      "name": "旧クレジットカード",
+      "kind": "credit_card",
+      "initial_balance": 0,
+      "balance": -4200,
+      "archived_at": "2026-03-31T15:00:00.000000+00:00",
+      "display_order": 2
+    }
+  ],
+  "total_assets": 573720
+}

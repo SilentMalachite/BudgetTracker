@@ -1,0 +1,34 @@
+[
+  {
+    "category_id": 5,
+    "category_name": "外食",
+    "category_color": "#764ba2",
+    "category_icon": null,
+    "budget_id": 12,
+    "budgeted": 20000,
+    "spent": 26000,
+    "percent": 130,
+    "progress_percent": 100,
+    "days_left": 16,
+    "projected": 52000,
+    "alert_threshold": 80,
+    "threshold_reached": true,
+    "projected_over_budget": true
+  },
+  {
+    "category_id": 1,
+    "category_name": "食費",
+    "category_color": "#f5576c",
+    "category_icon": "🍚",
+    "budget_id": 11,
+    "budgeted": 40000,
+    "spent": 12000,
+    "percent": 30,
+    "progress_percent": 30,
+    "days_left": 16,
+    "projected": 24000,
+    "alert_threshold": 80,
+    "threshold_reached": false,
+    "projected_over_budget": false
+  }
+]

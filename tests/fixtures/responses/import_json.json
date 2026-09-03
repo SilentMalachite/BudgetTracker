@@ -1,0 +1,9 @@
+{
+  "categories": 12,
+  "accounts": 3,
+  "transactions": 248,
+  "budgets": 4,
+  "warnings": [
+    "skipped duplicate category: 食費"
+  ]
+}

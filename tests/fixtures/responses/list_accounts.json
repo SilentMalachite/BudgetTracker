@@ -1,0 +1,38 @@
+[
+  {
+    "id": 1,
+    "name": "財布",
+    "kind": "cash",
+    "currency": "JPY",
+    "initial_balance": 5000,
+    "display_order": 0,
+    "note": "",
+    "archived_at": null,
+    "created_at": "2026-01-05T00:00:00.000000+00:00",
+    "updated_at": "2026-01-05T00:00:00.000000+00:00"
+  },
+  {
+    "id": 2,
+    "name": "給与振込口座",
+    "kind": "bank",
+    "currency": "JPY",
+    "initial_balance": 250000,
+    "display_order": 1,
+    "note": "毎月25日に給与が入る",
+    "archived_at": null,
+    "created_at": "2026-01-05T00:00:00.000000+00:00",
+    "updated_at": "2026-01-05T00:00:00.000000+00:00"
+  },
+  {
+    "id": 3,
+    "name": "旧クレジットカード",
+    "kind": "credit_card",
+    "currency": "JPY",
+    "initial_balance": 0,
+    "display_order": 2,
+    "note": "解約済み",
+    "archived_at": "2026-03-31T15:00:00.000000+00:00",
+    "created_at": "2026-01-05T00:00:00.000000+00:00",
+    "updated_at": "2026-03-31T15:00:00.000000+00:00"
+  }
+]
