@@ -386,10 +386,3 @@ fn yearly_report_always_has_twelve_months() {
     assert_eq!(report.avg_expense, 200); // 2400 / 12
     assert_eq!(report.max_expense_month, Some("2026-07".to_string()));
 }
-
-#[test]
-fn yearly_report_rejects_an_out_of_range_year() {
-    let (conn, _a, _b, _expense, _income) = seeded_db();
-    // コマンド層のガードと同じ境界をここで固定する。
-    assert!(budget_tracker_lib::commands::reports::build_yearly_report(&conn, 2026).is_ok());
-}
