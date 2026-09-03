@@ -20,6 +20,11 @@
   let mode = $state<ImportMode>('append');
   let warnings = $state<string[]>([]);
   let importStats = $state<ImportResult | null>(null);
+  /**
+   * 実際に取り込んだときのモード。`mode` はラジオに縛られていて結果を出したあとも
+   * 動くので、件数の説明文をそちらに引きずらせない。
+   */
+  let importedMode = $state<ImportMode | null>(null);
   let snapshots = $state<PreImportSnapshot[]>([]);
 
   onMount(() => {
@@ -128,10 +133,12 @@
     busy = true;
     message = null;
     importStats = null;
+    importedMode = null;
     warnings = [];
     try {
       const result = await importJson(await file.text(), mode);
       importStats = result;
+      importedMode = mode;
       warnings = result.warnings;
       // 件数は「新規に追加した行数」。追記で既存と重複した行は追加せず既存へまとめる
       // ので、この数には入らない (内訳は警告に出る)。
@@ -205,10 +212,14 @@
           新規追加: カテゴリ {importStats.categories} / 口座 {importStats.accounts} / 定期取引
           {importStats.recurring_rules} / 取引 {importStats.transactions} / 予算
           {importStats.budgets}
-          <br />
-          <small
-            >既存と重複した行は追加せず、既存の行にまとめています。内訳は警告を確認してください。</small
-          >
+          <!-- 上書きは取り込む前に全消しするので、何ひとつ「まとめて」いない。
+               まとめた内訳は警告に出るので、その警告が実際にあるときだけ案内する。 -->
+          {#if importedMode === 'append' && warnings.length > 0}
+            <br />
+            <small data-testid="settings-merge-note"
+              >既存と重複した行は追加せず、既存の行にまとめています。内訳は警告を確認してください。</small
+            >
+          {/if}
         </p>
       {/if}
       {#if warnings.length > 0}

@@ -70,7 +70,23 @@ describe('recurring api', () => {
 
     await previewRecurringOccurrences(input, 100);
 
-    expect(invokeMock).toHaveBeenCalledWith('preview_recurring_occurrences', { input, limit: 100 });
+    expect(invokeMock).toHaveBeenCalledWith('preview_recurring_occurrences', {
+      input,
+      limit: 100,
+      after: null,
+    });
+  });
+
+  it('passes the stored watermark as after for preview_recurring_occurrences', async () => {
+    invokeMock.mockResolvedValueOnce({ backfill: [], backfill_total: 0, truncated: false, upcoming: [] });
+
+    await previewRecurringOccurrences(input, 100, '2026-04-30');
+
+    expect(invokeMock).toHaveBeenCalledWith('preview_recurring_occurrences', {
+      input,
+      limit: 100,
+      after: '2026-04-30',
+    });
   });
 
   it('takes no arguments for expand_due_recurring', async () => {

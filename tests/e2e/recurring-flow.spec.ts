@@ -47,7 +47,7 @@ const createdRule = {
   active: true,
 };
 
-test('a new rule appears in the list with its next occurrence', async ({ page }) => {
+test('a backfilling save waits for an explicit confirmation', async ({ page }) => {
   // The app boots on Dashboard (`/`) before this test ever navigates to
   // `/recurring`, and Dashboard fans out to list_balances, monthly_summary,
   // monthly_series, list_transactions and list_top_budget_statuses on mount.
@@ -59,7 +59,8 @@ test('a new rule appears in the list with its next occurrence', async ({ page })
 
   await page.addInitScript(
     (fixtures) => {
-      const state = { created: false, expansions: 0 };
+      const state = { created: 0, expansions: 0 };
+      (window as any).__created = 0;
       const internals = (window as any).__TAURI_INTERNALS__ ?? {};
       const previous = internals.invoke;
       internals.invoke = async (command: string, args: any) => {
@@ -73,13 +74,19 @@ test('a new rule appears in the list with its next occurrence', async ({ page })
           case 'list_categories':
             return fixtures.categories;
           case 'list_recurring_rules':
-            return state.created
+            return state.created > 0
               ? [{ rule: fixtures.rule, next_occurrence: '2026-02-27' }]
               : [];
           case 'preview_recurring_occurrences':
-            return { backfill: [], backfill_total: 4, truncated: false, upcoming: ['2026-02-27'] };
+            return {
+              backfill: ['2026-01-27', '2026-02-27', '2026-03-27', '2026-04-27'],
+              backfill_total: 4,
+              truncated: false,
+              upcoming: ['2026-05-27'],
+            };
           case 'create_recurring_rule':
-            state.created = true;
+            state.created += 1;
+            (window as any).__created = state.created;
             return fixtures.rule;
           default:
             return typeof previous === 'function' ? previous(command, args) : null;
@@ -110,15 +117,82 @@ test('a new rule appears in the list with its next occurrence', async ({ page })
   await page.getByTestId('recurring-preview-button').click();
   await expect(page.getByTestId('recurring-preview')).toContainText('4 件');
 
+  // 開始日を動かすと、さっきの件数は今のフォームのものではなくなる。
+  await page.getByTestId('recurring-starts-on').fill('2026-01-20');
+  await expect(page.getByTestId('recurring-preview')).toHaveCount(0);
+  await page.getByTestId('recurring-starts-on').fill('2026-01-27');
+
+  // 過去にさかのぼる保存は、承諾するまで 1 行も書かない。
   await page.getByTestId('recurring-save').click();
+  await expect(page.getByTestId('recurring-backfill-confirm')).toContainText('4 件');
+  await expect(page.getByTestId('recurring-row')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).__created)).toBe(0);
+
+  await page.getByTestId('recurring-backfill-confirm-button').click();
 
   await expect(page.getByTestId('recurring-row')).toHaveCount(1);
   await expect(page.getByTestId('recurring-next')).toHaveText('2026-02-27');
+  expect(await page.evaluate(() => (window as any).__created)).toBe(1);
 
   // 保存が「今すぐ生成されます」を守る: 起動時の 1 回に加えて保存直後にも展開する。
   await expect
     .poll(() => page.evaluate(() => (window as any).__expansions))
     .toBe(2);
+});
+
+test('a rule with no backfill saves in one step', async ({ page }) => {
+  await installReadyBootMock(page);
+
+  await page.addInitScript(
+    (fixtures) => {
+      const state = { created: 0 };
+      (window as any).__created = 0;
+      const internals = (window as any).__TAURI_INTERNALS__ ?? {};
+      const previous = internals.invoke;
+      internals.invoke = async (command: string, args: any) => {
+        switch (command) {
+          case 'expand_due_recurring':
+            return { generated: 0, rules: [], skipped: [] };
+          case 'list_accounts':
+            return fixtures.accounts;
+          case 'list_categories':
+            return fixtures.categories;
+          case 'list_recurring_rules':
+            return state.created > 0
+              ? [{ rule: fixtures.rule, next_occurrence: '2026-02-27' }]
+              : [];
+          // 今日から始まるルールなので、生成される過去分はゼロ。
+          case 'preview_recurring_occurrences':
+            return { backfill: [], backfill_total: 0, truncated: false, upcoming: ['2026-02-27'] };
+          case 'create_recurring_rule':
+            state.created += 1;
+            (window as any).__created = state.created;
+            return fixtures.rule;
+          default:
+            return typeof previous === 'function' ? previous(command, args) : null;
+        }
+      };
+      (window as any).__TAURI_INTERNALS__ = internals;
+    },
+    { accounts: seededAccounts, categories: seededCategories, rule: createdRule },
+  );
+
+  await page.goto('/');
+  await page.getByTestId('nav-recurring').click();
+
+  await page.getByTestId('recurring-new').click();
+  await page.getByTestId('recurring-name').fill('家賃');
+  await page.getByTestId('recurring-amount').fill('85000');
+  await page.getByTestId('recurring-account').selectOption('1');
+  await page.getByTestId('recurring-category').selectOption('1');
+  await page.getByTestId('recurring-day-of-month').fill('27');
+
+  // 一度きりのクリックで保存が通る。何も生成されないものに確認は挟まない。
+  await page.getByTestId('recurring-save').click();
+
+  await expect(page.getByTestId('recurring-row')).toHaveCount(1);
+  await expect(page.getByTestId('recurring-backfill-confirm')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).__created)).toBe(1);
 });
 
 test('a skipped rule is flagged in the banner and on its own row', async ({ page }) => {
@@ -143,6 +217,15 @@ test('a skipped rule is flagged in the banner and on its own row', async ({ page
           case 'update_recurring_rule':
             state.repaired = true;
             return fixtures.rule;
+          // 見送られていたルールは watermark が進んでいない。直せば見送った期間が
+          // 生成されるので、保存はその件数を見せてから書く。
+          case 'preview_recurring_occurrences':
+            return {
+              backfill: ['2026-04-27'],
+              backfill_total: 1,
+              truncated: false,
+              upcoming: ['2026-05-27'],
+            };
           case 'list_accounts':
             return fixtures.accounts;
           case 'list_categories':
@@ -171,6 +254,7 @@ test('a skipped rule is flagged in the banner and on its own row', async ({ page
   // 参照先を直したら、その場でバッジが消える。再起動まで「壊れている」と出し続けない。
   await page.getByRole('button', { name: '編集' }).click();
   await page.getByTestId('recurring-save').click();
+  await page.getByTestId('recurring-backfill-confirm-button').click();
   await expect(badge).toHaveCount(0);
 
   // アプリシェルのバナーも同じ結果を読む。バッジだけ消えてバナーが古い件数を出した

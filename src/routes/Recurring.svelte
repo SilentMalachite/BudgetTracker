@@ -66,9 +66,14 @@
     { value: 'transfer', label: '振替' },
   ];
 
+  /** プレビューの backfill を何件まで並べるか。件数 (`backfill_total`) は切られない。 */
+  const PREVIEW_LIMIT = 100;
+
   function blankForm() {
     return {
       id: null as number | null,
+      // 編集中のルールの watermark。展開の窓の左端 (排他) で、プレビューにそのまま渡す。
+      last_generated_on: null as string | null,
       name: '',
       type: 'expense',
       amount: '',
@@ -87,8 +92,40 @@
   let open = $state(false);
   let form = $state(blankForm());
   let preview = $state<OccurrencePreview | null>(null);
+  /** `preview` を数えたときのフォームの鍵。今の鍵と違えば、その件数はもう古い。 */
+  let previewFor = $state<string | null>(null);
+  /** backfill の確認待ちになっている鍵。保存はここで止まり、何も書かない。 */
+  let awaitingFor = $state<string | null>(null);
+  /** ユーザーが backfill を明示的に承諾した鍵。 */
+  let confirmedFor = $state<string | null>(null);
   let formError = $state<string | null>(null);
   let saving = $state(false);
+
+  /**
+   * 発生日を決める項目だけを並べた鍵。1 文字でも変われば、前に数えた件数は
+   * 「今のフォームの件数」ではなくなる。`type` を含めるのは、種別が変わると
+   * 入力の妥当性ごと変わるため (振替は振替先、収支はカテゴリを要求する)。
+   */
+  const scheduleKey = $derived(
+    JSON.stringify([
+      form.type,
+      form.frequency,
+      form.day_of_month,
+      form.day_of_week,
+      form.starts_on,
+      form.ends_on,
+    ]),
+  );
+
+  /** 今のフォームに対して数えた件数だけを見せる。古い件数は表示ごと消す。 */
+  const shownPreview = $derived(previewFor === scheduleKey ? preview : null);
+
+  /** 確認待ちの backfill。フォームが動けば鍵が変わり、確認もやり直しになる。 */
+  const pendingBackfill = $derived(
+    awaitingFor === scheduleKey && shownPreview !== null && shownPreview.backfill_total > 0
+      ? shownPreview
+      : null,
+  );
 
   /** フォームの内容をコマンドの入力形に落とす。空文字は null に潰す。 */
   function toInput(): RecurringRuleInput {
@@ -110,9 +147,16 @@
     };
   }
 
+  function resetPreviewState() {
+    preview = null;
+    previewFor = null;
+    awaitingFor = null;
+    confirmedFor = null;
+  }
+
   function openCreate() {
     form = blankForm();
-    preview = null;
+    resetPreviewState();
     formError = null;
     open = true;
   }
@@ -121,6 +165,7 @@
     const r = view.rule;
     form = {
       id: r.id,
+      last_generated_on: r.last_generated_on,
       name: r.name,
       type: r.type,
       amount: String(r.amount),
@@ -134,18 +179,36 @@
       starts_on: r.starts_on,
       ends_on: r.ends_on ?? '',
     };
-    preview = null;
+    resetPreviewState();
     formError = null;
     open = true;
   }
 
-  /** 保存前に「今すぐ何件生成されるか」を Rust に数えさせる。 */
+  /**
+   * 「今すぐ何件生成されるか」を Rust に数えさせる。窓の左端は編集中のルールの
+   * watermark なので、返る件数は展開が実際に作る件数と同じ。
+   */
+  async function countOccurrences() {
+    const key = scheduleKey;
+    const counted = await previewRecurringOccurrences(
+      toInput(),
+      PREVIEW_LIMIT,
+      form.last_generated_on,
+    );
+    preview = counted;
+    previewFor = key;
+    return counted;
+  }
+
+  /** 「生成される日付を確認」ボタン。数えるだけで何も書かない。 */
   async function refreshPreview() {
     formError = null;
+    awaitingFor = null;
     try {
-      preview = await previewRecurringOccurrences(toInput(), 100);
+      await countOccurrences();
     } catch (e) {
       preview = null;
+      previewFor = null;
       formError = e instanceof Error ? e.message : String(e);
     }
   }
@@ -154,6 +217,19 @@
     saving = true;
     formError = null;
     try {
+      // 画面に出ている件数ではなく、保存する入力そのものから数え直す。開始日を
+      // 打ち間違えたまま何百件も生やす事故を止められるのは、この数え直しだけ。
+      const key = scheduleKey;
+      const counted = await countOccurrences();
+
+      // backfill が出るときだけ、本当の件数を見せて明示的な承諾を取る。0 件なら
+      // (= 今日から始まるルール) 手順は増やさない。
+      if (counted.backfill_total > 0 && confirmedFor !== key) {
+        awaitingFor = key;
+        return;
+      }
+      awaitingFor = null;
+
       if (form.id === null) await createRecurringRule(toInput());
       else await updateRecurringRule(form.id, toInput());
 
@@ -170,6 +246,16 @@
     } finally {
       saving = false;
     }
+  }
+
+  /**
+   * 「N 件を生成して保存」。承諾した鍵を控えてから保存をやり直すので、確認のあとに
+   * フォームが動いていれば鍵が変わり、もう一度確認を取ることになる。
+   */
+  async function confirmBackfillAndSave() {
+    confirmedFor = scheduleKey;
+    awaitingFor = null;
+    await save();
   }
 
   /** 失敗した展開をやり直す。起動時展開が失敗したままだと取引が 1 件も生成されない。 */
@@ -306,12 +392,6 @@
     <p class="hint">31 を選ぶと、31 日が無い月はその月の末日になります。</p>
   {/if}
 
-  {#if form.id !== null}
-    <p class="hint" data-testid="recurring-edit-caveat">
-      周期や発生日を変えると、今の期間にもう 1 件生成されることがあります。
-    </p>
-  {/if}
-
   <TextField label="開始日" type="date" bind:value={form.starts_on} required testid="recurring-starts-on" />
   <TextField label="終了日 (任意)" type="date" bind:value={form.ends_on} testid="recurring-ends-on" />
   <TextField label="メモ" bind:value={form.description} testid="recurring-description" />
@@ -320,13 +400,33 @@
     <Button variant="ghost" onclick={refreshPreview} testid="recurring-preview-button">
       生成される日付を確認
     </Button>
-    {#if preview}
+    {#if shownPreview}
       <p data-testid="recurring-preview">
-        保存すると {preview.backfill_total} 件が今すぐ生成されます。次回以降は
-        {preview.upcoming.join(' / ') || '予定なし'}
+        保存すると {shownPreview.backfill_total} 件が今すぐ生成されます。次回以降は
+        {shownPreview.upcoming.join(' / ') || '予定なし'}
       </p>
     {/if}
   </div>
+
+  {#if pendingBackfill}
+    <div class="backfill-confirm" role="alert" data-testid="recurring-backfill-confirm">
+      <p>
+        過去にさかのぼって {pendingBackfill.backfill_total} 件の取引を今すぐ生成します。
+        {#if pendingBackfill.backfill.length > 0}
+          最初は {pendingBackfill.backfill[0]}、最後は
+          {pendingBackfill.backfill[pendingBackfill.backfill.length - 1]} です。
+        {/if}
+        開始日が意図したものか確認してください。
+      </p>
+      <Button
+        onclick={confirmBackfillAndSave}
+        disabled={saving}
+        testid="recurring-backfill-confirm-button"
+      >
+        {pendingBackfill.backfill_total} 件を生成して保存
+      </Button>
+    </div>
+  {/if}
 
   {#if formError}
     <ErrorBanner message={formError} />
@@ -382,6 +482,21 @@
 
   .preview {
     margin-top: var(--space-4);
+  }
+
+  .backfill-confirm {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-top: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-md);
+    background: rgba(255, 170, 0, 0.22);
+  }
+
+  .backfill-confirm p {
+    margin: 0;
   }
 
   .expansion-error {

@@ -108,6 +108,87 @@ describe('Recurring', () => {
     expect(badge.textContent).toContain('口座がアーカイブ済み');
   });
 
+  /** 新規モーダルを開いて、保存できる最小限を埋める。 */
+  async function openNewRuleForm() {
+    render(Recurring);
+    await fireEvent.click(screen.getByTestId('recurring-new'));
+    await fireEvent.input(screen.getByTestId('recurring-name'), { target: { value: '家賃' } });
+    await fireEvent.input(screen.getByTestId('recurring-amount'), { target: { value: '85000' } });
+  }
+
+  const previewOf = (total: number) => ({
+    backfill: [],
+    backfill_total: total,
+    truncated: false,
+    upcoming: ['2026-02-27'],
+  });
+
+  it('drops a fetched preview as soon as a schedule field changes', async () => {
+    previewRecurringOccurrencesMock.mockResolvedValue(previewOf(4));
+    await openNewRuleForm();
+
+    await fireEvent.click(screen.getByTestId('recurring-preview-button'));
+    const shown = await screen.findByTestId('recurring-preview');
+    expect(shown.textContent).toContain('4 件');
+
+    // 開始日を動かした瞬間、さっきの件数は今のフォームの件数ではなくなる。
+    await fireEvent.input(screen.getByTestId('recurring-starts-on'), {
+      target: { value: '2020-01-01' },
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('recurring-preview')).toBeNull();
+    });
+  });
+
+  it('recounts at save and writes nothing until the backfill is confirmed', async () => {
+    previewRecurringOccurrencesMock.mockResolvedValue(previewOf(4));
+    await openNewRuleForm();
+
+    await fireEvent.click(screen.getByTestId('recurring-save'));
+
+    const confirmBlock = await screen.findByTestId('recurring-backfill-confirm');
+    expect(confirmBlock.textContent).toContain('4 件');
+    expect(createRecurringRuleMock).not.toHaveBeenCalled();
+
+    await fireEvent.click(screen.getByTestId('recurring-backfill-confirm-button'));
+
+    await waitFor(() => {
+      expect(createRecurringRuleMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('saves in one step when nothing would be backfilled', async () => {
+    previewRecurringOccurrencesMock.mockResolvedValue(previewOf(0));
+    await openNewRuleForm();
+
+    await fireEvent.click(screen.getByTestId('recurring-save'));
+
+    await waitFor(() => {
+      expect(createRecurringRuleMock).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByTestId('recurring-backfill-confirm')).toBeNull();
+  });
+
+  it('counts an edited rule from its stored watermark, not from starts_on', async () => {
+    listRecurringRulesMock.mockResolvedValue([
+      { ...view, rule: { ...view.rule, last_generated_on: '2026-04-30' } },
+    ]);
+    previewRecurringOccurrencesMock.mockResolvedValue(previewOf(0));
+
+    render(Recurring);
+    await fireEvent.click(await screen.findByText('編集'));
+    await fireEvent.click(screen.getByTestId('recurring-preview-button'));
+
+    await waitFor(() => {
+      expect(previewRecurringOccurrencesMock).toHaveBeenCalledWith(
+        expect.objectContaining({ starts_on: '2026-01-27' }),
+        100,
+        '2026-04-30',
+      );
+    });
+  });
+
   it('surfaces a failed expansion and retries it from this screen', async () => {
     expandDueRecurringMock.mockRejectedValueOnce(new Error('database is locked'));
     // 起動時展開が失敗した状態。App は開いたまま、失敗はストアに残る。

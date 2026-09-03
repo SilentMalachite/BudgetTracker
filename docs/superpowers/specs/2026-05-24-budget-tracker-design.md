@@ -336,14 +336,38 @@ CREATE TABLE app_meta (
 - **窓は左開右閉** `(last_generated_on, today]`。これが冪等性の本体で、
   `occurrences(a, c) == occurrences(a, b) ++ occurrences(b, c)` が成り立つ
 - **`last_generated_on` が NULL** のときは `starts_on` から遡って全件生成する。
-  「先月分の家賃を後から登録する」が意図通り動く。意図しない大量生成は、
-  作成フォームが `preview_recurring_occurrences` で件数を事前表示して防ぐ
+  「先月分の家賃を後から登録する」が意図通り動く。意図しない大量生成は次の
+  「保存前の確認」で防ぐ
 - **月末クランプ**: `day_of_month` がその月に存在しない場合は末日に寄せる
   （31 → 2月は 28/29、4月は 30）。yearly の 2/29 も平年は 2/28。
   スキップも翌月繰り越しもしない
 - **yearly の月**: `recurring_rules` に月カラムが無いため `starts_on` の月を使う
 - **weekly の `day_of_week`**: 必須（`0` = 日曜）。NULL はコマンド層で拒否
 - **ルールの削除**: §4.2 の論理削除方針に従い `active = 0`。行は消さない
+
+#### 保存前の確認
+
+`preview_recurring_occurrences(draft, limit, after)` は展開と同じ
+`occurrences_between` を同じ引数で呼ぶ。`after` は**編集中のルールの
+`last_generated_on`**（新規作成は NULL）。これを渡さないと、すでに生成し終えた過去
+まで「今すぐ生成されます」に数え上げ、起きもしない backfill を報告することになる。
+watermark は展開のたびに today まで進むので、健全なルールを編集したときの backfill は
+0 件になるのが普通。
+
+プレビューは「大量生成を防ぐ唯一の砦」なので、UI 側に 3 つの規則を課す:
+
+1. **古い件数を残さない** — `type` / `frequency` / `day_of_month` / `day_of_week` /
+   `starts_on` / `ends_on` のどれかが変わった瞬間、表示中のプレビューは消える。
+   確認した件数が、変更後のフォームの隣に残ってはならない
+2. **保存時に必ず数え直す** — 画面に何が出ていたか（出ていなかったか）に関係なく、
+   保存する入力そのものから数え直す
+3. **backfill が 1 件以上なら明示的な承諾を取る** — 数え直した件数と最初 / 最後の
+   発生日を見せ、ユーザーが承諾するまで 1 行も書かない。0 件なら手順を増やさない
+   （今日から始まるルールに確認は要らない）。承諾後にフォームが動けば、承諾は
+   無効になり確認をやり直す
+
+ルールの編集は「これから先の生成にだけ効く」（watermark が today まで進んでいるので
+窓が空になる）ため、周期や発生日を変えても今の期間に取引は生えない。
 
 #### アーカイブ済み参照の扱い
 
@@ -383,7 +407,9 @@ id では自分自身のバックアップですら一致しない。
 マージした事実と watermark の移動は警告として返す
 （`merged duplicate recurring rule: <名前> (last generated <旧> -> <新>)`）。
 `ImportResult` の各件数は「新規に追加した行数」で、マージした行は含めない。
-Settings 画面もこの件数を「新規追加」と明示して表示する。
+Settings 画面もこの件数を「新規追加」と明示して表示する。「重複した行は既存に
+まとめた」という注記は**追記モードで、かつ実際に警告があるときだけ**出す。上書きは
+取り込む前に全消しするので何ひとつまとめておらず、警告が無ければ指し示す内訳も無い。
 
 #### コマンド
 
@@ -392,7 +418,7 @@ Settings 画面もこの件数を「新規追加」と明示して表示する�
 | `list_recurring_rules(include_inactive)` | 一覧。各行に次回発生日を同梱 |
 | `create_recurring_rule` / `update_recurring_rule` | ルール CRUD |
 | `set_recurring_rule_active(id, active)` | 有効 / 停止 |
-| `preview_recurring_occurrences(draft, limit)` | 保存前の発生日プレビュー（生成しない） |
+| `preview_recurring_occurrences(draft, limit, after)` | 保存前の発生日プレビュー（生成しない）。`after` は編集中のルールの `last_generated_on` |
 | `expand_due_recurring()` | 起動時展開 |
 
 `expand_due_recurring()` の戻り値は生成総数・ルール別内訳・スキップ一覧
