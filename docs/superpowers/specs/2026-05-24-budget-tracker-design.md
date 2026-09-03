@@ -355,6 +355,36 @@ CREATE TABLE app_meta (
 検証には `domain/ledger.rs` の `assert_account_writable` / `assert_category_matches_tx`
 を `AllowedArchivedRefs::none()` で再利用する。
 
+#### バックアップ追記時の重複ルール
+
+`recurring_rules` には UNIQUE 制約が無いので、自分のバックアップを追記
+(`import_json` の `append`) すると同じスケジュールが 2 本並び、以後の展開が毎月
+同じ取引を二重に書き続ける。そこで追記では挿入の前に同一ルールを探す。同一性の
+キーは **name / type / amount / 口座 / counter_account / category_id / frequency /
+day_of_month / day_of_week / starts_on**。口座と counter_account は id ではなく
+行 (`name` / `kind` / `currency`) で照合する — 追記は口座を無条件に挿入するので、
+id では自分自身のバックアップですら一致しない。
+
+キーが一致した行には**挿入せず、キーに含まれない可変フィールドだけをマージする**:
+
+| 列 | 解決 |
+|---|---|
+| `last_generated_on` | **新しい方を採る**（NULL = 未生成なので日付に負ける） |
+| `ends_on` / `active` / `description` | **取り込み先（現行 DB）の値を残す** |
+
+`last_generated_on` だけ相手の値を採りうるのは、これが watermark で、巻き戻すと
+相手側がすでに生成した発生日をこちらでもう一度生成する = 金額が二重に入るから。
+逆に `ends_on` / `active` / `description` は、追記が「今の正」に足す操作である以上、
+普通はより古いスナップショットである取り込み元を採ると、ユーザーが自分で終了・
+停止させたルールが復活してしまう。可変フィールドをキーに足さないのも同じ理由で、
+キーが厳しすぎると「毎月二重課金する 2 本目の有効なルール」を作ってしまう
+（緩すぎた場合に失うのは、警告に出る 1 行ぶんの復旧可能な差分にすぎない）。
+
+マージした事実と watermark の移動は警告として返す
+（`merged duplicate recurring rule: <名前> (last generated <旧> -> <新>)`）。
+`ImportResult` の各件数は「新規に追加した行数」で、マージした行は含めない。
+Settings 画面もこの件数を「新規追加」と明示して表示する。
+
 #### コマンド
 
 | コマンド | 役割 |
@@ -530,3 +560,4 @@ Phase 5b で追加する4タブ:
 - 2026-08-29: §11 から SQLCipher 平文フォールバックを削除し、復号/鍵不一致時の Recovery 手順を明記
 - 2026-09-03: §11 に SQLCipher 形式固定 (`cipher_compatibility = 4`)、破損鍵の退避、quarantine 時の journal 同時退避を追記
 - 2026-09-03: Phase 5 を 5a (定期取引) / 5b (レポート強化) に分割し、§5.4 に展開の実行位置・日付生成規則・アーカイブ参照時の扱い・コマンド一覧を確定
+- 2026-09-03: §5.4 にバックアップ追記時の定期取引ルールの同一性キーとマージ規則 (watermark は新しい方、`ends_on`/`active`/`description` は取り込み先) を追記

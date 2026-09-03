@@ -133,7 +133,9 @@
       const result = await importJson(await file.text(), mode);
       importStats = result;
       warnings = result.warnings;
-      message = `読み込み完了: カテゴリ ${result.categories} / 口座 ${result.accounts} / 定期取引 ${result.recurring_rules} / 取引 ${result.transactions} / 予算 ${result.budgets}`;
+      // 件数は「新規に追加した行数」。追記で既存と重複した行は追加せず既存へまとめる
+      // ので、この数には入らない (内訳は警告に出る)。
+      message = `読み込み完了 — 新規追加: カテゴリ ${result.categories} / 口座 ${result.accounts} / 定期取引 ${result.recurring_rules} / 取引 ${result.transactions} / 予算 ${result.budgets}`;
       lastBackup = await getLastBackupAt();
       if (mode === 'overwrite') {
         await loadSnapshots();
@@ -200,9 +202,13 @@
       {/if}
       {#if importStats}
         <p class="stats">
-          カテゴリ {importStats.categories} / 口座 {importStats.accounts} / 定期取引
+          新規追加: カテゴリ {importStats.categories} / 口座 {importStats.accounts} / 定期取引
           {importStats.recurring_rules} / 取引 {importStats.transactions} / 予算
           {importStats.budgets}
+          <br />
+          <small
+            >既存と重複した行は追加せず、既存の行にまとめています。内訳は警告を確認してください。</small
+          >
         </p>
       {/if}
       {#if warnings.length > 0}

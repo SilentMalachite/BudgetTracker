@@ -383,15 +383,23 @@ fn insert_category(
 /// the same subscription under a different category, or the same transfer to a
 /// different bank — and silently drop the incoming one. Everything else is
 /// compared exactly as the insert writes it, including the same fallbacks.
-fn existing_recurring_rule_id(
+///
+/// The four *mutable* columns — `description`, `ends_on`, `last_generated_on`
+/// and `active` — are deliberately **not** part of the key: a rule whose
+/// schedule the user has since paused, ended or generated further is still the
+/// same rule, and keying on them would insert a second active schedule that
+/// double-charges every month, invisibly and for good. They are reconciled
+/// afterwards by [`merge_recurring_rule`] instead. The row's current
+/// `last_generated_on` comes back with the id because that merge needs it.
+fn existing_recurring_rule(
     tx: &rusqlite::Transaction<'_>,
     rule: &serde_json::Value,
     account_id: i64,
     counter_account_id: Option<i64>,
     category_id: Option<i64>,
-) -> AppResult<Option<i64>> {
+) -> AppResult<Option<(i64, Option<String>)>> {
     tx.query_row(
-        "SELECT r.id
+        "SELECT r.id, r.last_generated_on
            FROM recurring_rules r
            JOIN accounts a ON a.id = r.account_id
            JOIN accounts incoming ON incoming.id = ?1
@@ -425,14 +433,65 @@ fn existing_recurring_rule_id(
             counter_account_id,
             category_id,
         ],
-        |row| row.get(0),
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )
     .optional()
     .map_err(AppError::Db)
 }
 
+/// Fold an incoming rule into the existing row it duplicates, and describe what
+/// that did in a warning.
+///
+/// Only `last_generated_on` can move, and only forwards:
+///
+/// * **`last_generated_on` → the later of the two.** This is the expansion
+///   watermark, and it is the one field here whose value writes money. Keeping
+///   the earlier date would make the next expansion regenerate every occurrence
+///   between the two — occurrences the other database already generated and
+///   this import already appended. NULL means "never generated", so it loses to
+///   any date. Both dates are canonical `YYYY-MM-DD` (the incoming one is
+///   validated before `apply_snapshot` runs, the stored one is only ever
+///   written by this code), and that format is fixed-width and zero-padded, so
+///   comparing the strings is comparing the dates.
+/// * **`ends_on`, `active`, `description` → the target keeps its own.** Append
+///   adds to a database that is the current truth, and a backup is normally an
+///   older snapshot of it. Adopting the incoming values would revive a rule the
+///   user has since ended or paused, and quietly restore an edited-away note.
+fn merge_recurring_rule(
+    tx: &rusqlite::Transaction<'_>,
+    existing_id: i64,
+    existing_last_generated_on: Option<&str>,
+    rule: &serde_json::Value,
+    warnings: &mut Vec<String>,
+) -> AppResult<()> {
+    let name = value_str(rule, "name").unwrap_or("");
+    let incoming = value_str(rule, "last_generated_on");
+    let advanced = match (existing_last_generated_on, incoming) {
+        (None, Some(incoming)) => Some(incoming),
+        (Some(existing), Some(incoming)) if incoming > existing => Some(incoming),
+        _ => None,
+    };
+
+    match advanced {
+        Some(checkpoint) => {
+            tx.execute(
+                "UPDATE recurring_rules SET last_generated_on = ?1 WHERE id = ?2",
+                params![checkpoint, existing_id],
+            )?;
+            warnings.push(format!(
+                "merged duplicate recurring rule: {name} (last generated {} -> {checkpoint})",
+                existing_last_generated_on.unwrap_or("never")
+            ));
+        }
+        None => warnings.push(format!("merged duplicate recurring rule: {name}")),
+    }
+    Ok(())
+}
+
 /// `Some((id, inserted))`: the id transactions should point at, and whether a
-/// new row was actually written (an append that hit an existing rule reuses it).
+/// new row was actually written. An append that hit an existing rule merges
+/// into that row and reuses it, so it reports `false` — `ImportResult`
+/// counts rows added, and a merge adds none.
 fn insert_recurring_rule(
     tx: &rusqlite::Transaction<'_>,
     rule: &serde_json::Value,
@@ -502,13 +561,16 @@ fn insert_recurring_rule(
             true,
         )))
     } else {
-        if let Some(existing_id) =
-            existing_recurring_rule_id(tx, rule, account_id, counter_account_id, category_id)?
+        if let Some((existing_id, existing_last_generated_on)) =
+            existing_recurring_rule(tx, rule, account_id, counter_account_id, category_id)?
         {
-            warnings.push(format!(
-                "skipped duplicate recurring rule: {}",
-                value_str(rule, "name").unwrap_or("")
-            ));
+            merge_recurring_rule(
+                tx,
+                existing_id,
+                existing_last_generated_on.as_deref(),
+                rule,
+                warnings,
+            )?;
             return Ok(Some((existing_id, false)));
         }
         tx.execute(
