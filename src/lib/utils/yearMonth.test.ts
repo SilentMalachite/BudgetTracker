@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isYearMonth, isoToday, monthRange } from './yearMonth';
+import { presetRange } from './yearMonth';
 
 describe('isYearMonth', () => {
   it('accepts YYYY-MM with a month between 01 and 12', () => {
@@ -36,5 +37,26 @@ describe('monthRange', () => {
   it('returns inclusive local month bounds', () => {
     expect(monthRange(2026, 2)).toEqual({ from: '2026-02-01', to: '2026-02-28' });
     expect(monthRange(2024, 2)).toEqual({ from: '2024-02-01', to: '2024-02-29' });
+  });
+});
+
+
+describe('presetRange', () => {
+  const today = new Date(2026, 4, 15); // 2026-05-15
+
+  it('last12 ends on the current month and spans twelve', () => {
+    expect(presetRange('last12', today)).toEqual({ from: '2025-06', to: '2026-05' });
+  });
+
+  it('last6 spans six months', () => {
+    expect(presetRange('last6', today)).toEqual({ from: '2025-12', to: '2026-05' });
+  });
+
+  it('last24 spans twenty-four months', () => {
+    expect(presetRange('last24', today)).toEqual({ from: '2024-06', to: '2026-05' });
+  });
+
+  it('thisYear covers january through december', () => {
+    expect(presetRange('thisYear', today)).toEqual({ from: '2026-01', to: '2026-12' });
   });
 });
