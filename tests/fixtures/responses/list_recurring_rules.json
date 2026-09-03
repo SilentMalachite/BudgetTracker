@@ -1,0 +1,42 @@
+[
+  {
+    "rule": {
+      "id": 1,
+      "name": "家賃",
+      "type": "expense",
+      "amount": 85000,
+      "account_id": 1,
+      "counter_account_id": null,
+      "category_id": 1,
+      "description": "毎月の家賃",
+      "frequency": "monthly",
+      "day_of_month": 27,
+      "day_of_week": null,
+      "starts_on": "2026-01-27",
+      "ends_on": null,
+      "last_generated_on": "2026-06-27",
+      "active": true
+    },
+    "next_occurrence": "2026-07-27"
+  },
+  {
+    "rule": {
+      "id": 2,
+      "name": "週次の貯金",
+      "type": "transfer",
+      "amount": 5000,
+      "account_id": 2,
+      "counter_account_id": 1,
+      "category_id": null,
+      "description": "",
+      "frequency": "weekly",
+      "day_of_month": null,
+      "day_of_week": 1,
+      "starts_on": "2026-01-05",
+      "ends_on": "2026-12-28",
+      "last_generated_on": null,
+      "active": false
+    },
+    "next_occurrence": null
+  }
+]

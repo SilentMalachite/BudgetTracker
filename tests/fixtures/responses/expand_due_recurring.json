@@ -1,0 +1,18 @@
+{
+  "generated": 2,
+  "rules": [
+    {
+      "rule_id": 1,
+      "rule_name": "家賃",
+      "generated": 2,
+      "last_generated_on": "2026-06-27"
+    }
+  ],
+  "skipped": [
+    {
+      "rule_id": 2,
+      "rule_name": "週次の貯金",
+      "reason": "archived_counter_account"
+    }
+  ]
+}
