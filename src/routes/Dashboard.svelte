@@ -1,16 +1,8 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import {
-    BarController,
-    BarElement,
-    CategoryScale,
-    Chart,
-    Legend,
-    LinearScale,
-    Tooltip,
-  } from 'chart.js';
   import type { UnlistenFn } from '@tauri-apps/api/event';
   import Card from '../lib/components/Card.svelte';
+  import Chart from '../lib/components/Chart.svelte';
   import EmptyState from '../lib/components/EmptyState.svelte';
   import { listTopBudgetStatuses, type BudgetStatus } from '../lib/api/budgets';
   import { onDataChanged } from '../lib/api/events';
@@ -19,8 +11,6 @@
   import { createBalancesStore } from '../lib/stores/balances.svelte';
   import { createCategoriesStore } from '../lib/stores/categories.svelte';
   import { formatCurrency } from '../lib/utils/formatCurrency';
-
-  Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend);
 
   const today = new Date();
   const currentYear = today.getFullYear();
@@ -34,13 +24,25 @@
   let recent = $state<Transaction[]>([]);
   let topBudgetStatuses = $state<BudgetStatus[]>([]);
   let error = $state<string | null>(null);
-  let canvas = $state<HTMLCanvasElement | null>(null);
-  let chart: Chart<'bar'> | null = null;
   let unlisten: UnlistenFn | null = null;
   let disposed = false;
   let reloadId = 0;
 
   const categoryById = $derived(new Map(catStore.items.map((item) => [item.id, item])));
+
+  const chartData = $derived({
+    labels: series.map((bucket) => bucket.year_month),
+    datasets: [
+      { label: '収入', data: series.map((bucket) => bucket.income), backgroundColor: '#4facfe' },
+      { label: '支出', data: series.map((bucket) => bucket.expense), backgroundColor: '#e53e3e' },
+    ],
+  });
+
+  const chartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    scales: { y: { beginAtZero: true } },
+  };
 
   async function reload() {
     const id = ++reloadId;
@@ -57,7 +59,6 @@
       series = nextSeries;
       recent = nextRecent.items;
       topBudgetStatuses = nextBudgets;
-      drawChart();
     } catch (e) {
       if (disposed || id !== reloadId) return;
       error = e instanceof Error ? e.message : String(e);
@@ -65,39 +66,7 @@
       series = [];
       recent = [];
       topBudgetStatuses = [];
-      drawChart();
     }
-  }
-
-  function drawChart() {
-    if (disposed || !canvas) return;
-    const labels = series.map((bucket) => bucket.year_month);
-    const income = series.map((bucket) => bucket.income);
-    const expense = series.map((bucket) => bucket.expense);
-
-    if (chart) {
-      chart.data.labels = labels;
-      chart.data.datasets[0].data = income;
-      chart.data.datasets[1].data = expense;
-      chart.update();
-      return;
-    }
-
-    chart = new Chart(canvas, {
-      type: 'bar',
-      data: {
-        labels,
-        datasets: [
-          { label: '収入', data: income, backgroundColor: '#4facfe' },
-          { label: '支出', data: expense, backgroundColor: '#e53e3e' },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        scales: { y: { beginAtZero: true } },
-      },
-    });
   }
 
   onMount(() => {
@@ -126,8 +95,6 @@
 
   onDestroy(() => {
     disposed = true;
-    chart?.destroy();
-    chart = null;
     unlisten?.();
     unlisten = null;
     void catStore.dispose();
@@ -213,7 +180,13 @@
       {#snippet children()}
         <h2>月別収支</h2>
         <div class="chart-box">
-          <canvas bind:this={canvas} aria-label="直近12ヶ月の収入と支出"></canvas>
+          <Chart
+            type="bar"
+            data={chartData}
+            options={chartOptions}
+            ariaLabel="直近12ヶ月の収入と支出"
+            testId="chart-monthly-series"
+          />
         </div>
       {/snippet}
     </Card>
