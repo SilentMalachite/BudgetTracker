@@ -17,11 +17,7 @@ pub fn monthly_summary(
     year: i32,
     month: u32,
 ) -> AppResult<MonthlySummary> {
-    if !(1..=12).contains(&month) {
-        return Err(AppError::InvalidArgument(format!(
-            "month out of range: {month}"
-        )));
-    }
+    validate_month(month)?;
     state.with_conn(|conn| report_repo::monthly_summary(conn, year, month))
 }
 
@@ -130,6 +126,16 @@ fn validate_year(year: i32) -> AppResult<()> {
     Ok(())
 }
 
+/// `monthly_summary` / `report_monthly` が共有する月の妥当性チェック。
+fn validate_month(month: u32) -> AppResult<()> {
+    if !(1..=12).contains(&month) {
+        return Err(AppError::InvalidArgument(format!(
+            "month out of range: {month}"
+        )));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn report_monthly(
     state: State<'_, AppState>,
@@ -137,11 +143,7 @@ pub fn report_monthly(
     month: u32,
 ) -> AppResult<MonthlyReport> {
     validate_year(year)?;
-    if !(1..=12).contains(&month) {
-        return Err(AppError::InvalidArgument(format!(
-            "month out of range: {month}"
-        )));
-    }
+    validate_month(month)?;
     state.with_conn(|conn| build_monthly_report(conn, year, month))
 }
 
@@ -149,4 +151,38 @@ pub fn report_monthly(
 pub fn report_yearly(state: State<'_, AppState>, year: i32) -> AppResult<YearlyReport> {
     validate_year(year)?;
     state.with_conn(|conn| build_yearly_report(conn, year))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_year_rejects_out_of_range() {
+        let err = validate_year(999).unwrap_err();
+        assert!(matches!(err, AppError::InvalidArgument(_)));
+
+        let err = validate_year(10_000).unwrap_err();
+        assert!(matches!(err, AppError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn validate_year_accepts_in_range() {
+        assert!(validate_year(2026).is_ok());
+    }
+
+    #[test]
+    fn validate_month_rejects_out_of_range() {
+        let err = validate_month(0).unwrap_err();
+        assert!(matches!(err, AppError::InvalidArgument(_)));
+
+        let err = validate_month(13).unwrap_err();
+        assert!(matches!(err, AppError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn validate_month_accepts_in_range() {
+        assert!(validate_month(1).is_ok());
+        assert!(validate_month(12).is_ok());
+    }
 }
