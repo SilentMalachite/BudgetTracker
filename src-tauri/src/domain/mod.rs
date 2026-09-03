@@ -1,5 +1,6 @@
 pub mod category;
 pub mod account;
+pub mod date;
 pub mod ledger;
 pub mod report;
 pub mod seed;

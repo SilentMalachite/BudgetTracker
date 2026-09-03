@@ -72,12 +72,7 @@ pub struct RawInput<'a> {
 /// Validate an income/expense transaction input. Transfer rows must use the
 /// dedicated create_transfer / update_transfer commands.
 pub fn validate_input(raw: &RawInput<'_>) -> AppResult<ValidatedInput> {
-    chrono::NaiveDate::parse_from_str(raw.occurred_on, "%Y-%m-%d").map_err(|_| {
-        AppError::InvalidArgument(format!(
-            "occurred_on must be YYYY-MM-DD, got '{}'",
-            raw.occurred_on
-        ))
-    })?;
+    crate::domain::date::parse_iso_date("occurred_on", raw.occurred_on)?;
 
     let type_ = TxType::parse(raw.type_)?;
     if matches!(type_, TxType::Transfer) {
@@ -227,17 +222,12 @@ pub struct RawTransferInput<'a> {
 ///
 /// Invariants enforced here (the V001 CHECK enforces shape; the validator
 /// enforces things SQL cannot, like source != destination):
-/// - `occurred_on` is `YYYY-MM-DD`.
+/// - `occurred_on` is canonical `YYYY-MM-DD` (see `domain::date`).
 /// - `amount > 0`.
 /// - `account_id != counter_account_id` (the CHECK constraint does not catch this).
 /// - `description.chars().count() <= MAX_DESCRIPTION_LEN`.
 pub fn validate_transfer_input(raw: &RawTransferInput<'_>) -> AppResult<ValidatedTransferInput> {
-    chrono::NaiveDate::parse_from_str(raw.occurred_on, "%Y-%m-%d").map_err(|_| {
-        AppError::InvalidArgument(format!(
-            "occurred_on must be YYYY-MM-DD, got '{}'",
-            raw.occurred_on
-        ))
-    })?;
+    crate::domain::date::parse_iso_date("occurred_on", raw.occurred_on)?;
 
     if raw.amount <= 0 {
         return Err(AppError::InvalidArgument(format!(
@@ -547,6 +537,53 @@ mod tests {
             validate_transfer_input(&bad).unwrap_err(),
             AppError::InvalidArgument(_)
         ));
+    }
+
+    #[test]
+    fn rejects_non_canonical_dates_for_income_expense_and_transfer() {
+        // chrono's `%Y-%m-%d` alone accepts these; stored verbatim they break
+        // `strftime('%Y-%m', occurred_on)` and the `BETWEEN 'YYYY-MM-01' ...`
+        // range scans in report_repo / budget_repo.
+        for raw in [
+            "2026-5-5",
+            " 2026-05-05",
+            "+2026-05-05",
+            "2026-02-30",
+            "2026/05/05",
+        ] {
+            let mut bad = ok(100);
+            bad.occurred_on = raw;
+            let err = validate_input(&bad).unwrap_err();
+            assert!(
+                matches!(err, AppError::InvalidArgument(_)),
+                "{raw:?} must be rejected for income/expense, got {err:?}"
+            );
+            assert!(err.to_string().contains("occurred_on"), "{err}");
+
+            let mut bad_transfer = ok_transfer();
+            bad_transfer.occurred_on = raw;
+            let err = validate_transfer_input(&bad_transfer).unwrap_err();
+            assert!(
+                matches!(err, AppError::InvalidArgument(_)),
+                "{raw:?} must be rejected for transfers, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_canonical_dates_including_leap_day() {
+        for raw in ["2026-05-05", "2024-02-29"] {
+            let mut good = ok(100);
+            good.occurred_on = raw;
+            assert_eq!(validate_input(&good).unwrap().occurred_on, raw);
+
+            let mut good_transfer = ok_transfer();
+            good_transfer.occurred_on = raw;
+            assert_eq!(
+                validate_transfer_input(&good_transfer).unwrap().occurred_on,
+                raw
+            );
+        }
     }
 }
 

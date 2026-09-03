@@ -2,6 +2,7 @@ use budget_tracker_lib::commands::backup;
 use budget_tracker_lib::domain::account::AccountKind;
 use budget_tracker_lib::domain::category::CategoryType;
 use budget_tracker_lib::domain::ledger::TxType;
+use budget_tracker_lib::error::AppError;
 use budget_tracker_lib::infra::migrations;
 use budget_tracker_lib::infra::repo::{account_repo, category_repo, transaction_repo};
 use rusqlite::{params, Connection};
@@ -458,4 +459,318 @@ fn overwrite_import_does_not_restore_last_backup_at() {
         )
         .unwrap();
     assert_eq!(last_backup_at, "2026-05-25T00:00:00Z");
+}
+
+// ---------------------------------------------------------------------------
+// Import validation: every row that the create-path commands would reject must
+// surface as an `ImportValidation` row error (entity[index]: message) before
+// anything touches the database.
+// ---------------------------------------------------------------------------
+
+const CASH_ACCOUNT_JSON: &str = r#"{
+  "id": 1, "name": "現金", "kind": "cash", "currency": "JPY", "initial_balance": 1000,
+  "display_order": 0, "note": "", "archived_at": null,
+  "created_at": "2026-05-25T00:00:00Z", "updated_at": "2026-05-25T00:00:00Z"
+}"#;
+
+fn category_json(type_: &str, color: &str) -> String {
+    format!(
+        r#"{{ "id": 1, "name": "snapshot cat", "type": "{type_}", "color": {color},
+              "icon": null, "display_order": 0, "archived_at": null }}"#
+    )
+}
+
+fn expense_json(occurred_on: &str, type_: &str, category_id: &str) -> String {
+    format!(
+        r#"{{ "id": 1, "occurred_on": "{occurred_on}", "type": "{type_}", "amount": 100,
+              "account_id": 1, "counter_account_id": null, "category_id": {category_id},
+              "description": "", "recurring_id": null,
+              "created_at": "2026-05-25T00:00:00Z", "updated_at": "2026-05-25T00:00:00Z" }}"#
+    )
+}
+
+fn budget_json(period: &str, starts_on: &str) -> String {
+    format!(
+        r#"{{ "id": 1, "category_id": 1, "period": "{period}", "amount": 1000,
+              "starts_on": "{starts_on}", "ends_on": null, "alert_threshold": 80 }}"#
+    )
+}
+
+fn recurring_rule_json(
+    frequency: &str,
+    day_of_month: &str,
+    day_of_week: &str,
+    starts_on: &str,
+    ends_on: &str,
+) -> String {
+    format!(
+        r#"{{ "id": 1, "name": "家賃", "type": "expense", "amount": 80000, "account_id": 1,
+              "counter_account_id": null, "category_id": 1, "description": "",
+              "frequency": "{frequency}", "day_of_month": {day_of_month},
+              "day_of_week": {day_of_week}, "starts_on": "{starts_on}", "ends_on": {ends_on},
+              "last_generated_on": null, "active": 1 }}"#
+    )
+}
+
+fn payload(
+    categories: &str,
+    accounts: &str,
+    recurring_rules: &str,
+    transactions: &str,
+    budgets: &str,
+) -> String {
+    format!(
+        r#"{{
+      "schema_version": 1,
+      "exported_at": "2026-05-25T00:00:00Z",
+      "categories": [{categories}],
+      "accounts": [{accounts}],
+      "recurring_rules": [{recurring_rules}],
+      "transactions": [{transactions}],
+      "budgets": [{budgets}],
+      "app_meta": []
+    }}"#
+    )
+}
+
+fn table_counts(conn: &Connection) -> [i64; 5] {
+    [
+        count(conn, "accounts"),
+        count(conn, "categories"),
+        count(conn, "recurring_rules"),
+        count(conn, "transactions"),
+        count(conn, "budgets"),
+    ]
+}
+
+/// Import `payload` in append mode and assert it is rejected as an
+/// `ImportValidation` error naming `entity_index` (e.g. `budget[0]`) with a
+/// message containing `needle`, and that no table changed.
+fn assert_import_rejected(payload: &str, entity_index: &str, needle: &str) {
+    let mut conn = seeded_db();
+    let before = table_counts(&conn);
+
+    let err = backup::import_snapshot_json(&mut conn, payload, "append").unwrap_err();
+    assert!(
+        matches!(err, AppError::ImportValidation(_)),
+        "expected ImportValidation, got {err:?}"
+    );
+    let message = err.to_string();
+    assert!(message.contains(entity_index), "{message}");
+    assert!(message.contains(needle), "{message}");
+    assert_eq!(table_counts(&conn), before, "import must not touch the DB");
+}
+
+#[test]
+fn import_rejects_non_canonical_transaction_date() {
+    let payload = payload(
+        &category_json("expense", "null"),
+        CASH_ACCOUNT_JSON,
+        "",
+        &expense_json("2026-5-25", "expense", "1"),
+        "",
+    );
+    assert_import_rejected(&payload, "transaction[0]", "YYYY-MM-DD");
+}
+
+#[test]
+fn import_rejects_transaction_whose_category_type_mismatches() {
+    let payload = payload(
+        &category_json("income", "null"),
+        CASH_ACCOUNT_JSON,
+        "",
+        &expense_json("2026-05-25", "expense", "1"),
+        "",
+    );
+    assert_import_rejected(&payload, "transaction[0]", "type does not match");
+}
+
+#[test]
+fn import_rejects_transfer_with_category() {
+    let transfer = r#"{ "id": 1, "occurred_on": "2026-05-25", "type": "transfer", "amount": 100,
+          "account_id": 1, "counter_account_id": 2, "category_id": 1, "description": "",
+          "recurring_id": null, "created_at": "2026-05-25T00:00:00Z",
+          "updated_at": "2026-05-25T00:00:00Z" }"#;
+    let bank = CASH_ACCOUNT_JSON
+        .replace("\"id\": 1", "\"id\": 2")
+        .replace("現金", "銀行");
+    let accounts = format!("{CASH_ACCOUNT_JSON},{bank}");
+    let payload = payload(
+        &category_json("expense", "null"),
+        &accounts,
+        "",
+        transfer,
+        "",
+    );
+    assert_import_rejected(&payload, "transfer[0]", "category");
+}
+
+#[test]
+fn import_rejects_budget_with_non_monthly_period() {
+    let payload = payload(
+        &category_json("expense", "null"),
+        CASH_ACCOUNT_JSON,
+        "",
+        "",
+        &budget_json("yearly", "2026-05-01"),
+    );
+    assert_import_rejected(&payload, "budget[0]", "monthly");
+}
+
+#[test]
+fn import_rejects_budget_not_starting_on_first_of_month() {
+    let payload = payload(
+        &category_json("expense", "null"),
+        CASH_ACCOUNT_JSON,
+        "",
+        "",
+        &budget_json("monthly", "2026-05-15"),
+    );
+    assert_import_rejected(&payload, "budget[0]", "first day");
+}
+
+#[test]
+fn import_rejects_budget_with_non_canonical_starts_on() {
+    let payload = payload(
+        &category_json("expense", "null"),
+        CASH_ACCOUNT_JSON,
+        "",
+        "",
+        &budget_json("monthly", "2026-5-1"),
+    );
+    assert_import_rejected(&payload, "budget[0]", "YYYY-MM-DD");
+}
+
+#[test]
+fn import_rejects_budget_on_income_category() {
+    let payload = payload(
+        &category_json("income", "null"),
+        CASH_ACCOUNT_JSON,
+        "",
+        "",
+        &budget_json("monthly", "2026-05-01"),
+    );
+    assert_import_rejected(&payload, "budget[0]", "not an expense category");
+}
+
+#[test]
+fn import_rejects_account_note_over_limit() {
+    let long_note = "あ".repeat(201);
+    let account =
+        CASH_ACCOUNT_JSON.replace("\"note\": \"\"", &format!("\"note\": \"{long_note}\""));
+    let payload = payload("", &account, "", "", "");
+    assert_import_rejected(&payload, "account[0]", "note must be 200 chars or fewer");
+}
+
+#[test]
+fn import_rejects_category_with_invalid_color() {
+    // The frontend interpolates category.color into an inline style attribute,
+    // so anything other than #RRGGBB must never reach the database.
+    let payload = payload(
+        &category_json("expense", "\"red;background:url(x)\""),
+        "",
+        "",
+        "",
+        "",
+    );
+    assert_import_rejected(&payload, "category[0]", "#RRGGBB");
+}
+
+#[test]
+fn import_rejects_recurring_rule_with_invalid_frequency() {
+    let payload = payload(
+        &category_json("expense", "null"),
+        CASH_ACCOUNT_JSON,
+        &recurring_rule_json("daily", "25", "null", "2026-05-01", "null"),
+        "",
+        "",
+    );
+    assert_import_rejected(&payload, "recurring_rule[0]", "frequency");
+}
+
+#[test]
+fn import_rejects_recurring_rule_with_day_of_month_out_of_range() {
+    let payload = payload(
+        &category_json("expense", "null"),
+        CASH_ACCOUNT_JSON,
+        &recurring_rule_json("monthly", "32", "null", "2026-05-01", "null"),
+        "",
+        "",
+    );
+    assert_import_rejected(&payload, "recurring_rule[0]", "day_of_month");
+}
+
+#[test]
+fn import_rejects_recurring_rule_with_day_of_week_out_of_range() {
+    let payload = payload(
+        &category_json("expense", "null"),
+        CASH_ACCOUNT_JSON,
+        &recurring_rule_json("weekly", "null", "7", "2026-05-01", "null"),
+        "",
+        "",
+    );
+    assert_import_rejected(&payload, "recurring_rule[0]", "day_of_week");
+}
+
+#[test]
+fn import_rejects_recurring_rule_with_non_canonical_starts_on() {
+    let payload = payload(
+        &category_json("expense", "null"),
+        CASH_ACCOUNT_JSON,
+        &recurring_rule_json("monthly", "25", "null", "2026-5-1", "null"),
+        "",
+        "",
+    );
+    assert_import_rejected(&payload, "recurring_rule[0]", "starts_on");
+}
+
+#[test]
+fn import_rejects_recurring_rule_with_ends_on_before_starts_on() {
+    let payload = payload(
+        &category_json("expense", "null"),
+        CASH_ACCOUNT_JSON,
+        &recurring_rule_json("monthly", "25", "null", "2026-05-01", "\"2026-04-30\""),
+        "",
+        "",
+    );
+    assert_import_rejected(&payload, "recurring_rule[0]", "ends_on");
+}
+
+#[test]
+fn import_rejects_recurring_rule_with_non_positive_amount() {
+    let rule = recurring_rule_json("monthly", "25", "null", "2026-05-01", "null")
+        .replace("\"amount\": 80000", "\"amount\": 0");
+    let payload = payload(
+        &category_json("expense", "null"),
+        CASH_ACCOUNT_JSON,
+        &rule,
+        "",
+        "",
+    );
+    assert_import_rejected(&payload, "recurring_rule[0]", "amount");
+}
+
+#[test]
+fn overwrite_import_restores_history_on_archived_category() {
+    // Rule 5: categories are archived, never deleted, precisely so that
+    // historical transactions and budgets survive. A backup taken after the
+    // archive must therefore round-trip, even though the create-path commands
+    // refuse to attach *new* rows to an archived category.
+    let source = seeded_db();
+    source
+        .execute(
+            "UPDATE categories SET archived_at = '2026-06-01T00:00:00Z' WHERE name = '食費'",
+            [],
+        )
+        .unwrap();
+    let snapshot = backup::export_snapshot_json(&source).unwrap();
+
+    let mut target = Connection::open_in_memory().unwrap();
+    migrations::run(&mut target).unwrap();
+    let result = backup::import_snapshot_json(&mut target, &snapshot, "overwrite").unwrap();
+
+    assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    assert_eq!(result.transactions, 1);
+    assert_eq!(result.budgets, 1);
+    assert_eq!(count(&target, "recurring_rules"), 1);
 }

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
 use crate::commands::meta::AppState;
+use crate::domain::date;
 use crate::domain::ledger::{self, Transaction, TxType};
 use crate::error::{AppError, AppResult};
 use crate::infra::events::{emit_changed, ChangedDomain};
@@ -54,6 +55,28 @@ pub struct ListTransactionResult {
     pub total: u32,
 }
 
+/// Turn the wire-level filter into the repo filter, validating everything that
+/// ends up compared lexically against stored text in SQL (`occurred_on >= ?`,
+/// `occurred_on <= ?`): a non-canonical `from` / `to` would silently
+/// mis-filter instead of erroring.
+pub fn build_list_filter(filter: ListTransactionFilter) -> AppResult<transaction_repo::ListFilter> {
+    let type_ = filter.type_.as_deref().map(TxType::parse).transpose()?;
+    if let Some(from) = filter.from.as_deref() {
+        date::parse_iso_date("from", from)?;
+    }
+    if let Some(to) = filter.to.as_deref() {
+        date::parse_iso_date("to", to)?;
+    }
+    Ok(transaction_repo::ListFilter {
+        from: filter.from,
+        to: filter.to,
+        type_,
+        category_id: filter.category_id,
+        account_id: filter.account_id,
+        search: filter.search,
+    })
+}
+
 #[tauri::command]
 pub fn list_transactions(
     state: State<'_, AppState>,
@@ -62,15 +85,7 @@ pub fn list_transactions(
     page_size: u32,
 ) -> AppResult<ListTransactionResult> {
     let page_size = parse_page_size(page_size)?;
-    let type_ = filter.type_.as_deref().map(TxType::parse).transpose()?;
-    let repo_filter = transaction_repo::ListFilter {
-        from: filter.from,
-        to: filter.to,
-        type_,
-        category_id: filter.category_id,
-        account_id: filter.account_id,
-        search: filter.search,
-    };
+    let repo_filter = build_list_filter(filter)?;
     let (items, total) =
         state.with_conn(|conn| transaction_repo::list(conn, &repo_filter, page, page_size))?;
     Ok(ListTransactionResult { items, total })
@@ -340,6 +355,58 @@ mod tests {
         .unwrap();
         assert_eq!(input.amount, 30_000);
         assert_eq!(input.description, "");
+    }
+
+    #[test]
+    fn list_filter_rejects_non_canonical_from_and_to() {
+        // `from` / `to` are compared lexically against occurred_on in SQL, so
+        // anything but canonical YYYY-MM-DD silently mis-filters.
+        for raw in [
+            "2026-5-5",
+            " 2026-05-05",
+            "+2026-05-05",
+            "2026-02-30",
+            "2026/05/05",
+        ] {
+            let err = build_list_filter(ListTransactionFilter {
+                from: Some(raw.into()),
+                ..Default::default()
+            })
+            .unwrap_err();
+            assert!(
+                matches!(err, AppError::InvalidArgument(_)),
+                "from={raw:?}: {err:?}"
+            );
+            assert!(err.to_string().contains("from must be YYYY-MM-DD"), "{err}");
+
+            let err = build_list_filter(ListTransactionFilter {
+                to: Some(raw.into()),
+                ..Default::default()
+            })
+            .unwrap_err();
+            assert!(
+                matches!(err, AppError::InvalidArgument(_)),
+                "to={raw:?}: {err:?}"
+            );
+            assert!(err.to_string().contains("to must be YYYY-MM-DD"), "{err}");
+        }
+    }
+
+    #[test]
+    fn list_filter_accepts_canonical_range_and_absent_dates() {
+        let filter = build_list_filter(ListTransactionFilter {
+            from: Some("2026-05-01".into()),
+            to: Some("2026-05-31".into()),
+            type_: Some("expense".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(filter.from.as_deref(), Some("2026-05-01"));
+        assert_eq!(filter.to.as_deref(), Some("2026-05-31"));
+        assert_eq!(filter.type_, Some(TxType::Expense));
+
+        let empty = build_list_filter(ListTransactionFilter::default()).unwrap();
+        assert!(empty.from.is_none() && empty.to.is_none());
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use chrono::Datelike;
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -8,8 +9,9 @@ use tauri::{AppHandle, State};
 use crate::commands::meta::AppState;
 use crate::domain::account::{self, AccountKind};
 use crate::domain::budget::{self, RawSetBudgetInput};
-use crate::domain::category::{self, CategoryType};
-use crate::domain::ledger;
+use crate::domain::category::{self, Category, CategoryType};
+use crate::domain::date::parse_iso_date;
+use crate::domain::ledger::{self, TxType};
 use crate::error::{AppError, AppResult, ImportRowError};
 use crate::infra::events::{emit_changed, ChangedDomain};
 use crate::infra::repo::meta_repo;
@@ -663,6 +665,11 @@ fn validate_account_row(index: u32, row: &serde_json::Value, errors: &mut Vec<Im
         }
     }
     let _ = required_i64(row, "initial_balance", index, ENTITY, errors);
+    if let Some(note) = value_str(row, "note") {
+        if let Err(err) = account::validate_note(note) {
+            push_error(errors, index, ENTITY, domain_message(err));
+        }
+    }
 }
 
 fn validate_category_row(index: u32, row: &serde_json::Value, errors: &mut Vec<ImportRowError>) {
@@ -677,12 +684,48 @@ fn validate_category_row(index: u32, row: &serde_json::Value, errors: &mut Vec<I
             push_error(errors, index, ENTITY, domain_message(err));
         }
     }
+    // The frontend interpolates `color` into an inline style attribute, so it
+    // must be a strict #RRGGBB exactly as create_category / update_category require.
+    if let Some(color) = value_str(row, "color") {
+        if let Err(err) = category::validate_color(color) {
+            push_error(errors, index, ENTITY, domain_message(err));
+        }
+    }
+}
+
+/// Categories declared in the snapshot, keyed by their *snapshot* id, so that
+/// transaction and budget rows can be checked against the category they will
+/// be attached to before anything is inserted. Rows that fail their own
+/// validation are omitted here — they already produce a `category[i]` error —
+/// and rows referencing an id that is absent are left to the insert path,
+/// which warns-and-skips in append mode and errors in overwrite mode.
+fn snapshot_categories(snap: &Snapshot) -> HashMap<i64, Category> {
+    snap.categories
+        .iter()
+        .filter_map(|row| {
+            let id = value_i64(row, "id")?;
+            let type_ = CategoryType::parse(value_str(row, "type")?).ok()?;
+            Some((
+                id,
+                Category {
+                    id,
+                    name: value_str(row, "name").unwrap_or("").to_string(),
+                    type_,
+                    color: value_str(row, "color").map(str::to_string),
+                    icon: value_str(row, "icon").map(str::to_string),
+                    display_order: value_i64(row, "display_order").unwrap_or(0),
+                    archived_at: value_str(row, "archived_at").map(str::to_string),
+                },
+            ))
+        })
+        .collect()
 }
 
 fn validate_income_expense_row(
     index: u32,
     type_: &str,
     row: &serde_json::Value,
+    categories: &HashMap<i64, Category>,
     errors: &mut Vec<ImportRowError>,
 ) {
     const ENTITY: &str = "transaction";
@@ -693,7 +736,7 @@ fn validate_income_expense_row(
     else {
         return;
     };
-    if let Err(err) = ledger::validate_input(&ledger::RawInput {
+    let validated = match ledger::validate_input(&ledger::RawInput {
         occurred_on,
         type_,
         amount,
@@ -701,7 +744,21 @@ fn validate_income_expense_row(
         category_id: value_i64(row, "category_id"),
         description: value_str(row, "description").unwrap_or(""),
     }) {
-        push_error(errors, index, ENTITY, domain_message(err));
+        Ok(validated) => validated,
+        Err(err) => {
+            push_error(errors, index, ENTITY, domain_message(err));
+            return;
+        }
+    };
+    if let Some(category) = categories.get(&validated.category_id) {
+        // Same check as create_transaction, except that an archived category is
+        // allowed: a backup taken after archiving must still restore its history
+        // (rule 5), so `allow_id` is the category itself and only the type is enforced.
+        if let Err(err) =
+            ledger::assert_category_matches_tx(category, validated.type_, Some(category.id))
+        {
+            push_error(errors, index, ENTITY, domain_message(err));
+        }
     }
 }
 
@@ -711,6 +768,14 @@ fn validate_transfer_row(index: u32, row: &serde_json::Value, errors: &mut Vec<I
     let amount = required_i64(row, "amount", index, ENTITY, errors);
     let account_id = required_i64(row, "account_id", index, ENTITY, errors);
     let counter_account_id = required_i64(row, "counter_account_id", index, ENTITY, errors);
+    if row.get("category_id").is_some_and(|v| !v.is_null()) {
+        push_error(
+            errors,
+            index,
+            ENTITY,
+            "transfer rows must not have a category_id",
+        );
+    }
     let (Some(occurred_on), Some(amount), Some(account_id), Some(counter_account_id)) =
         (occurred_on, amount, account_id, counter_account_id)
     else {
@@ -727,52 +792,219 @@ fn validate_transfer_row(index: u32, row: &serde_json::Value, errors: &mut Vec<I
     }
 }
 
-fn validate_transaction_row(index: u32, row: &serde_json::Value, errors: &mut Vec<ImportRowError>) {
+fn validate_transaction_row(
+    index: u32,
+    row: &serde_json::Value,
+    categories: &HashMap<i64, Category>,
+    errors: &mut Vec<ImportRowError>,
+) {
     let Some(type_) = required_str(row, "type", index, "transaction", errors) else {
         return;
     };
     if type_ == "transfer" {
         validate_transfer_row(index, row, errors);
     } else {
-        validate_income_expense_row(index, type_, row, errors);
+        validate_income_expense_row(index, type_, row, categories, errors);
     }
 }
 
-fn validate_budget_row(index: u32, row: &serde_json::Value, errors: &mut Vec<ImportRowError>) {
+fn validate_budget_row(
+    index: u32,
+    row: &serde_json::Value,
+    categories: &HashMap<i64, Category>,
+    errors: &mut Vec<ImportRowError>,
+) {
     const ENTITY: &str = "budget";
     let category_id = required_i64(row, "category_id", index, ENTITY, errors);
+    let period = required_str(row, "period", index, ENTITY, errors);
     let amount = required_i64(row, "amount", index, ENTITY, errors);
     let starts_on = required_str(row, "starts_on", index, ENTITY, errors);
     let alert_threshold = required_i64(row, "alert_threshold", index, ENTITY, errors);
-    let (Some(category_id), Some(amount), Some(starts_on), Some(alert_threshold)) =
-        (category_id, amount, starts_on, alert_threshold)
+    let (Some(category_id), Some(period), Some(amount), Some(starts_on), Some(alert_threshold)) =
+        (category_id, period, amount, starts_on, alert_threshold)
     else {
         return;
     };
-    let year_month = starts_on.get(..7).unwrap_or(starts_on);
+
+    // set_budget only ever writes monthly budgets anchored on the 1st, so an
+    // imported row must have the same shape or the month lookups will miss it.
+    if period != "monthly" {
+        push_error(
+            errors,
+            index,
+            ENTITY,
+            format!("period must be 'monthly', got '{period}'"),
+        );
+    }
+    let starts = match parse_iso_date("starts_on", starts_on) {
+        Ok(date) => date,
+        Err(err) => {
+            push_error(errors, index, ENTITY, domain_message(err));
+            return;
+        }
+    };
+    if starts.day() != 1 {
+        push_error(
+            errors,
+            index,
+            ENTITY,
+            format!("starts_on must be the first day of the month, got '{starts_on}'"),
+        );
+    }
+    if let Some(ends_on) = value_str(row, "ends_on") {
+        match parse_iso_date("ends_on", ends_on) {
+            Ok(ends) if ends < starts => push_error(
+                errors,
+                index,
+                ENTITY,
+                format!("ends_on '{ends_on}' is before starts_on '{starts_on}'"),
+            ),
+            Ok(_) => {}
+            Err(err) => push_error(errors, index, ENTITY, domain_message(err)),
+        }
+    }
     if let Err(err) = budget::validate_set_budget_input(&RawSetBudgetInput {
         category_id,
-        year_month,
+        // Safe: parse_iso_date guaranteed exactly ten ASCII bytes.
+        year_month: &starts_on[..7],
         amount,
         alert_threshold,
     }) {
         push_error(errors, index, ENTITY, domain_message(err));
     }
+    // Same type rule as commands::budgets::validate_category_for_budget. The
+    // archived check is deliberately *not* mirrored: exports contain budgets on
+    // categories archived later, and those must round-trip (rule 5).
+    if let Some(category) = categories.get(&category_id) {
+        if category.type_ != CategoryType::Expense {
+            push_error(
+                errors,
+                index,
+                ENTITY,
+                format!("category {category_id} is not an expense category"),
+            );
+        }
+    }
+}
+
+/// Mirror the V001 CHECK constraints on `recurring_rules` so a bad row yields
+/// a `recurring_rule[i]` error instead of a raw SQLite constraint failure.
+fn validate_recurring_rule_row(
+    index: u32,
+    row: &serde_json::Value,
+    errors: &mut Vec<ImportRowError>,
+) {
+    const ENTITY: &str = "recurring_rule";
+    if let Some(type_) = required_str(row, "type", index, ENTITY, errors) {
+        if let Err(err) = TxType::parse(type_) {
+            push_error(errors, index, ENTITY, domain_message(err));
+        }
+    }
+    if let Some(amount) = required_i64(row, "amount", index, ENTITY, errors) {
+        if amount <= 0 {
+            push_error(
+                errors,
+                index,
+                ENTITY,
+                format!("amount must be positive, got {amount}"),
+            );
+        }
+    }
+    let _ = required_i64(row, "account_id", index, ENTITY, errors);
+    if let Some(frequency) = required_str(row, "frequency", index, ENTITY, errors) {
+        if !matches!(frequency, "monthly" | "weekly" | "yearly") {
+            push_error(
+                errors,
+                index,
+                ENTITY,
+                format!("frequency must be monthly|weekly|yearly, got '{frequency}'"),
+            );
+        }
+    }
+    if let Some(day) = value_i64(row, "day_of_month") {
+        if !(1..=31).contains(&day) {
+            push_error(
+                errors,
+                index,
+                ENTITY,
+                format!("day_of_month must be 1..=31, got {day}"),
+            );
+        }
+    }
+    if let Some(day) = value_i64(row, "day_of_week") {
+        if !(0..=6).contains(&day) {
+            push_error(
+                errors,
+                index,
+                ENTITY,
+                format!("day_of_week must be 0..=6, got {day}"),
+            );
+        }
+    }
+    if let Some(active) = value_i64(row, "active") {
+        if !matches!(active, 0 | 1) {
+            push_error(
+                errors,
+                index,
+                ENTITY,
+                format!("active must be 0 or 1, got {active}"),
+            );
+        }
+    }
+    let starts_on =
+        required_str(row, "starts_on", index, ENTITY, errors).and_then(|raw| match parse_iso_date(
+            "starts_on",
+            raw,
+        ) {
+            Ok(date) => Some((raw, date)),
+            Err(err) => {
+                push_error(errors, index, ENTITY, domain_message(err));
+                None
+            }
+        });
+    if let Some(raw_ends_on) = value_str(row, "ends_on") {
+        match parse_iso_date("ends_on", raw_ends_on) {
+            Ok(ends_on) => {
+                if let Some((raw_starts_on, starts_on)) = starts_on {
+                    if ends_on < starts_on {
+                        push_error(
+                            errors,
+                            index,
+                            ENTITY,
+                            format!(
+                                "ends_on '{raw_ends_on}' is before starts_on '{raw_starts_on}'"
+                            ),
+                        );
+                    }
+                }
+            }
+            Err(err) => push_error(errors, index, ENTITY, domain_message(err)),
+        }
+    }
+    if let Some(last_generated_on) = value_str(row, "last_generated_on") {
+        if let Err(err) = parse_iso_date("last_generated_on", last_generated_on) {
+            push_error(errors, index, ENTITY, domain_message(err));
+        }
+    }
 }
 
 fn collect_import_errors(snap: &Snapshot) -> Vec<ImportRowError> {
     let mut errors = Vec::new();
+    let categories = snapshot_categories(snap);
     for (index, row) in snap.accounts.iter().enumerate() {
         validate_account_row(index as u32, row, &mut errors);
     }
     for (index, row) in snap.categories.iter().enumerate() {
         validate_category_row(index as u32, row, &mut errors);
     }
+    for (index, row) in snap.recurring_rules.iter().enumerate() {
+        validate_recurring_rule_row(index as u32, row, &mut errors);
+    }
     for (index, row) in snap.transactions.iter().enumerate() {
-        validate_transaction_row(index as u32, row, &mut errors);
+        validate_transaction_row(index as u32, row, &categories, &mut errors);
     }
     for (index, row) in snap.budgets.iter().enumerate() {
-        validate_budget_row(index as u32, row, &mut errors);
+        validate_budget_row(index as u32, row, &categories, &mut errors);
     }
     errors
 }
