@@ -45,7 +45,12 @@ fn lock_inner(inner: &Mutex<AppInner>) -> AppResult<std::sync::MutexGuard<'_, Ap
 fn obtain_recovery_key(keys: &dyn KeyStore) -> AppResult<DbKey> {
     match keys.get() {
         Ok(Some(key)) => Ok(key),
-        Ok(None) | Err(AppError::Corrupt(_)) => {
+        Ok(None) => keys.create(),
+        Err(AppError::Corrupt(_)) => {
+            // The entry could not be decoded, but its bytes may still be the
+            // only thing that decrypts the quarantined data.db. Park them
+            // under a stamped entry before the slot is deleted and re-minted.
+            keys.preserve_corrupt()?;
             keys.delete()?;
             keys.create()
         }
@@ -212,8 +217,20 @@ mod tests {
 
     struct RecordingKeys {
         get: fn() -> AppResult<Option<DbKey>>,
-        create_calls: Mutex<u32>,
-        delete_calls: Mutex<u32>,
+        calls: Mutex<Vec<&'static str>>,
+    }
+
+    impl RecordingKeys {
+        fn new(get: fn() -> AppResult<Option<DbKey>>) -> Self {
+            Self {
+                get,
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn calls(&self) -> Vec<&'static str> {
+            self.calls.lock().unwrap().clone()
+        }
     }
 
     impl KeyStore for RecordingKeys {
@@ -221,12 +238,16 @@ mod tests {
             (self.get)()
         }
         fn create(&self) -> AppResult<DbKey> {
-            *self.create_calls.lock().unwrap() += 1;
+            self.calls.lock().unwrap().push("create");
             Ok([9u8; KEY_LEN])
         }
         fn delete(&self) -> AppResult<()> {
-            *self.delete_calls.lock().unwrap() += 1;
+            self.calls.lock().unwrap().push("delete");
             Ok(())
+        }
+        fn preserve_corrupt(&self) -> AppResult<Option<String>> {
+            self.calls.lock().unwrap().push("preserve");
+            Ok(Some("db_key.corrupt-test".into()))
         }
     }
 
@@ -236,41 +257,30 @@ mod tests {
 
     #[test]
     fn obtain_recovery_key_does_not_replace_on_keychain_error() {
-        let keys = RecordingKeys {
-            get: || Err(keychain_error()),
-            create_calls: Mutex::new(0),
-            delete_calls: Mutex::new(0),
-        };
+        let keys = RecordingKeys::new(|| Err(keychain_error()));
         let err = obtain_recovery_key(&keys).unwrap_err();
         assert!(matches!(err, AppError::Keychain(_)));
-        assert_eq!(*keys.create_calls.lock().unwrap(), 0);
-        assert_eq!(*keys.delete_calls.lock().unwrap(), 0);
+        assert!(keys.calls().is_empty(), "got {:?}", keys.calls());
     }
 
     #[test]
     fn obtain_recovery_key_mints_when_missing() {
-        let keys = RecordingKeys {
-            get: || Ok(None),
-            create_calls: Mutex::new(0),
-            delete_calls: Mutex::new(0),
-        };
+        let keys = RecordingKeys::new(|| Ok(None));
         let key = obtain_recovery_key(&keys).unwrap();
         assert_eq!(key, [9u8; KEY_LEN]);
-        assert_eq!(*keys.delete_calls.lock().unwrap(), 1);
-        assert_eq!(*keys.create_calls.lock().unwrap(), 1);
+        assert_eq!(keys.calls(), ["create"]);
     }
 
     #[test]
-    fn obtain_recovery_key_replaces_corrupt_entry() {
-        let keys = RecordingKeys {
-            get: || Err(AppError::Corrupt("wrong length".into())),
-            create_calls: Mutex::new(0),
-            delete_calls: Mutex::new(0),
-        };
+    fn obtain_recovery_key_preserves_corrupt_entry_before_replacing_it() {
+        let keys = RecordingKeys::new(|| Err(AppError::Corrupt("wrong length".into())));
         let key = obtain_recovery_key(&keys).unwrap();
         assert_eq!(key, [9u8; KEY_LEN]);
-        assert_eq!(*keys.delete_calls.lock().unwrap(), 1);
-        assert_eq!(*keys.create_calls.lock().unwrap(), 1);
+        assert_eq!(
+            keys.calls(),
+            ["preserve", "delete", "create"],
+            "the undecodable secret must be parked before the slot is deleted"
+        );
     }
 
     #[test]
@@ -331,11 +341,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let (inner, db_path) = recovery_state(&dir);
         std::fs::write(&db_path, b"old ledger").unwrap();
-        let keys = RecordingKeys {
-            get: || Err(keychain_error()),
-            create_calls: Mutex::new(0),
-            delete_calls: Mutex::new(0),
-        };
+        let keys = RecordingKeys::new(|| Err(keychain_error()));
 
         let err = recover_start_empty(&inner, &keys).unwrap_err();
 
@@ -356,11 +362,7 @@ mod tests {
         let (inner, db_path) = recovery_state(&dir);
         std::fs::write(&db_path, b"old ledger").unwrap();
         std::fs::write(with_suffix(&db_path, "-journal"), b"hot journal").unwrap();
-        let keys = RecordingKeys {
-            get: || Ok(Some([9u8; KEY_LEN])),
-            create_calls: Mutex::new(0),
-            delete_calls: Mutex::new(0),
-        };
+        let keys = RecordingKeys::new(|| Ok(Some([9u8; KEY_LEN])));
 
         recover_start_empty(&inner, &keys).unwrap();
 

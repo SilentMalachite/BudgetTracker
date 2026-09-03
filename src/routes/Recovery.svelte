@@ -63,6 +63,12 @@
           <dd data-testid="recovery-reason">{reason}</dd>
         {/if}
       </dl>
+      {#if reason === 'key_corrupt'}
+        <p class="hint" data-testid="recovery-key-hint">
+          読めなくなった鍵は削除せず、Keychain / 資格情報マネージャーに
+          <code>db_key.corrupt-&lt;日時&gt;</code> の名前で残します。
+        </p>
+      {/if}
       <label class="file">
         JSON バックアップから復元
         <input
@@ -125,5 +131,10 @@
     border-radius: var(--radius-sm);
     background: rgba(0, 0, 0, 0.04);
     padding: var(--space-3);
+  }
+
+  .hint {
+    font-size: 0.9em;
+    opacity: 0.8;
   }
 </style>

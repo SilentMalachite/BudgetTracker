@@ -25,6 +25,9 @@ impl KeyStore for MemKeys {
         *self.key.lock().unwrap() = None;
         Ok(())
     }
+    fn preserve_corrupt(&self) -> budget_tracker_lib::error::AppResult<Option<String>> {
+        Ok(None)
+    }
 }
 
 fn data_dir() -> tempfile::TempDir {

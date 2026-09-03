@@ -16,6 +16,9 @@ pub trait KeyStore: Send + Sync {
     fn get(&self) -> AppResult<Option<DbKey>>;
     fn create(&self) -> AppResult<DbKey>;
     fn delete(&self) -> AppResult<()>;
+    /// Park the current, undecodable secret under a stamped sibling entry so
+    /// that `delete` never destroys the only copy. Returns that entry's name.
+    fn preserve_corrupt(&self) -> AppResult<Option<String>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -116,5 +119,12 @@ impl KeyStore for OsKeyStore {
     }
     fn delete(&self) -> AppResult<()> {
         crate::infra::keychain::delete_key(&self.service, &self.account)
+    }
+    fn preserve_corrupt(&self) -> AppResult<Option<String>> {
+        crate::infra::keychain::preserve_corrupt_key(
+            &self.service,
+            &self.account,
+            chrono::Utc::now(),
+        )
     }
 }

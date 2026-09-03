@@ -72,6 +72,40 @@ pub fn delete_key(service: &str, account: &str) -> AppResult<()> {
     }
 }
 
+/// Copy the raw secret stored under `account` to `<account>.corrupt-<stamp>`
+/// in the same service. Recovery calls this before deleting an entry it could
+/// not decode, so bytes that might still decrypt the quarantined `data.db`
+/// are parked rather than destroyed. Returns the account the copy was stored
+/// under, or `None` when there was no entry to preserve.
+pub fn preserve_corrupt_key(
+    service: &str,
+    account: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> AppResult<Option<String>> {
+    let raw = match keyring::Entry::new(service, account)?.get_secret() {
+        Ok(raw) => raw,
+        Err(keyring::Error::NoEntry) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let stamp = now.format("%Y%m%dT%H%M%SZ");
+    let mut backup_account = format!("{account}.corrupt-{stamp}");
+    let mut n = 2u32;
+    while entry_exists(service, &backup_account)? {
+        backup_account = format!("{account}.corrupt-{stamp}-{n}");
+        n += 1;
+    }
+    keyring::Entry::new(service, &backup_account)?.set_secret(&raw)?;
+    Ok(Some(backup_account))
+}
+
+fn entry_exists(service: &str, account: &str) -> AppResult<bool> {
+    match keyring::Entry::new(service, account)?.get_secret() {
+        Ok(_) => Ok(true),
+        Err(keyring::Error::NoEntry) => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,6 +254,74 @@ mod tests {
     fn wrong_length_entry_returns_corrupt_error() {
         // "c2hvcnQ" is the base64-NO-PAD encoding of "short" (5 bytes), which is != KEY_LEN
         assert_stored_secret_is_corrupt("wrong-len", b"c2hvcnQ");
+    }
+
+    fn fixed_now() -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339("2026-08-29T12:30:45Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn preserve_corrupt_key_copies_raw_bytes_to_stamped_account() {
+        ensure_mock();
+        let account = unique_account("preserve");
+        let entry = keyring::Entry::new("test", &account).unwrap();
+        entry.set_secret(b"\xff\xfe not text").unwrap();
+
+        let backup = preserve_corrupt_key("test", &account, fixed_now())
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(backup, format!("{account}.corrupt-20260829T123045Z"));
+        let copy = keyring::Entry::new("test", &backup).unwrap();
+        assert_eq!(copy.get_secret().unwrap(), b"\xff\xfe not text");
+        assert_eq!(
+            entry.get_secret().unwrap(),
+            b"\xff\xfe not text",
+            "the original entry is left for delete_key"
+        );
+        delete_key("test", &account).unwrap();
+        delete_key("test", &backup).unwrap();
+    }
+
+    #[test]
+    fn preserve_corrupt_key_never_overwrites_an_earlier_copy() {
+        ensure_mock();
+        let account = unique_account("preserve-twice");
+        let entry = keyring::Entry::new("test", &account).unwrap();
+        entry.set_secret(b"first").unwrap();
+        let first = preserve_corrupt_key("test", &account, fixed_now())
+            .unwrap()
+            .unwrap();
+        entry.set_secret(b"second").unwrap();
+
+        let second = preserve_corrupt_key("test", &account, fixed_now())
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(second, format!("{first}-2"));
+        let secret_of = |name: &str| {
+            keyring::Entry::new("test", name)
+                .unwrap()
+                .get_secret()
+                .unwrap()
+        };
+        assert_eq!(secret_of(&first), b"first");
+        assert_eq!(secret_of(&second), b"second");
+        for name in [&account, &first, &second] {
+            delete_key("test", name).unwrap();
+        }
+    }
+
+    #[test]
+    fn preserve_corrupt_key_is_noop_when_entry_is_absent() {
+        ensure_mock();
+        let account = unique_account("preserve-absent");
+        assert_eq!(
+            preserve_corrupt_key("test", &account, fixed_now()).unwrap(),
+            None
+        );
     }
 
     #[test]

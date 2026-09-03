@@ -5,6 +5,9 @@ use rusqlite::Connection;
 use crate::error::{AppError, AppResult};
 use crate::infra::keychain::{DbKey, KEY_LEN};
 
+/// SQLCipher file-format generation every `data.db` is written and read with.
+pub const SQLCIPHER_FORMAT_VERSION: i64 = 4;
+
 fn key_to_hex(key: &DbKey) -> String {
     let mut s = String::with_capacity(KEY_LEN * 2);
     for b in key {
@@ -22,6 +25,13 @@ pub fn open_encrypted(path: &Path, key: &DbKey) -> AppResult<Connection> {
     // PRAGMA key with raw bytes form `x'<hex>'` is safe against SQL injection
     // because hex is from our own 32-byte buffer.
     conn.pragma_update(None, "key", format!("x'{hex}'"))?;
+    // Pin the on-disk format. SQLCipher 3.x -> 4.x changed the KDF / HMAC /
+    // page-size defaults; without this pin a future major bump would turn
+    // every existing data.db into a "decrypt failed" recovery prompt even
+    // though the key is intact. Moving to a newer format is a deliberate
+    // step: open under this pin, run `PRAGMA cipher_migrate`, then raise
+    // SQLCIPHER_FORMAT_VERSION.
+    conn.pragma_update(None, "cipher_compatibility", SQLCIPHER_FORMAT_VERSION)?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     // Touch the database to force PRAGMA key to take effect on first use.
     conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))?;
@@ -73,6 +83,20 @@ mod tests {
             .query_row("SELECT v FROM t WHERE id=1", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, "hello");
+    }
+
+    #[test]
+    fn bundled_sqlcipher_matches_pinned_format_version() {
+        let tmp = TempDir::new().unwrap();
+        let conn = open_encrypted(&tmp.path().join("data.db"), &make_key(3)).unwrap();
+        let version: String = conn
+            .query_row("PRAGMA cipher_version", [], |r| r.get(0))
+            .unwrap();
+        assert!(
+            version.starts_with(&format!("{SQLCIPHER_FORMAT_VERSION}.")),
+            "bundled SQLCipher is {version}: existing databases need `PRAGMA cipher_migrate` \
+             before SQLCIPHER_FORMAT_VERSION can move"
+        );
     }
 
     #[test]
