@@ -311,9 +311,23 @@ CREATE TABLE app_meta (
 1. `recurring_rules WHERE active = 1` を取得
 2. 各ルールについて `(last_generated_on, 今日]` に発生すべき日付を計算
 3. 該当日付ぶんの transactions を一括 INSERT（`recurring_id` を紐づけ）
-4. `last_generated_on` を更新
+4. `last_generated_on` を `max(last_generated_on, 今日)` に更新
 
 全ルールを単一トランザクションで処理する。
+
+`last_generated_on` は「最後に生成した日」ではなく **「どこまで調べ終えたか」**
+（watermark）。生成が 0 件だったルールも今日まで進める。理由:
+
+- 発生日で止めると watermark が時計から遅れ続ける。その状態でユーザーが発生日を
+  変えると、次の窓が「もう締めた期間」まで遡り、過去日の取引が生える
+  （3/27 で止めたまま 4/15 に「毎月 1 日」へ付け替えると 4/1 が生成される）。
+  **ルールの編集は、これから先の生成にだけ効く**
+- 進めても取りこぼさない。窓 `(last_generated_on, today]` が返す日付は必ず
+  今日以下で、その全件をこの回で生成済みだから
+- `max` を取るのは、`import_json` 経由で今日より先の watermark を持つ行が
+  入りうるため。巻き戻すと同じ日を二重生成する
+
+ただし次節の「展開を見送ったルール」だけは例外で、watermark を進めない。
 
 #### 日付生成の規則
 

@@ -474,6 +474,15 @@ fn tx_count(conn: &Connection) -> i64 {
         .unwrap()
 }
 
+fn occurred_dates(conn: &Connection) -> Vec<String> {
+    conn.prepare("SELECT occurred_on FROM transactions ORDER BY occurred_on")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect()
+}
+
 #[test]
 fn expansion_generates_every_missed_date_from_starts_on() {
     let conn = fresh();
@@ -488,7 +497,9 @@ fn expansion_generates_every_missed_date_from_starts_on() {
     assert_eq!(tx_count(&conn), 3);
     assert_eq!(result.rules.len(), 1);
     assert_eq!(result.rules[0].generated, 3);
-    assert_eq!(result.rules[0].last_generated_on, "2026-03-27");
+    // watermark は最後の発生日 (3/27) ではなく「どこまで調べ終えたか」= today。
+    // 3/27 で止めると、あとでルールの発生日を変えたとき窓が 3/27 まで遡ってしまう。
+    assert_eq!(result.rules[0].last_generated_on, "2026-04-01");
     assert!(result.skipped.is_empty());
 }
 
@@ -505,6 +516,108 @@ fn expanding_twice_on_the_same_day_generates_nothing_the_second_time() {
     assert_eq!(second.generated, 0);
     assert!(second.rules.is_empty());
     assert_eq!(tx_count(&conn), 3);
+}
+
+/// 1 件も生成しなかった健全なルールも watermark を today まで進める。
+///
+/// 進めないと watermark が時計から遅れ続け、あとでルールを編集したときに窓が
+/// 締めた期間まで遡ってしまう
+/// (`editing_a_rule_does_not_backfill_into_the_settled_period` が実害)。
+/// 窓は `(last_generated_on, today]` で、`occurrences_between` が返す日付は
+/// 必ず `today` 以下なので、today まで進めても発生日を飛ばすことはない。
+#[test]
+fn a_healthy_rule_that_generated_nothing_still_advances_its_watermark() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    let rule =
+        recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+
+    // starts_on (2026-01-27) より前なので 1 件も発生しない。
+    let result =
+        recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 1, 10), NOW).unwrap();
+
+    assert_eq!(result.generated, 0);
+    // 0 件のルールは「生成した内訳」には出さない (UI のバナーは実仕事だけ数える)。
+    assert!(result.rules.is_empty());
+    assert!(result.skipped.is_empty());
+
+    let stored = recurring_repo::find_by_id(&conn, rule.id).unwrap();
+    assert_eq!(stored.last_generated_on.as_deref(), Some("2026-01-10"));
+
+    // watermark を進めても、これから来る 1/27 は取りこぼさない。
+    let later =
+        recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 1, 31), NOW).unwrap();
+    assert_eq!(later.generated, 1);
+    assert_eq!(occurred_dates(&conn), vec!["2026-01-27"]);
+}
+
+/// ルールの編集は「これから先の生成」にだけ効く。
+///
+/// watermark が最後の発生日 (3/27) で止まっていると、4/15 に「毎月 1 日」へ
+/// 付け替えた瞬間、次の窓 `(3/27, 4/15]` が 4/1 を含んでしまい、ユーザーが
+/// 精算済みと考えている日に取引が生える。
+#[test]
+fn editing_a_rule_does_not_backfill_into_the_settled_period() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    let rule =
+        recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+
+    // 4/1 に展開。毎月 27 日なので 1/27・2/27・3/27 の 3 件。
+    recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 4, 1), NOW).unwrap();
+    assert_eq!(
+        occurred_dates(&conn),
+        vec!["2026-01-27", "2026-02-27", "2026-03-27"]
+    );
+
+    // 4/15 に「毎月 1 日」へ付け替える。
+    recurring_cmd::update_rule_for_conn(
+        &conn,
+        rule.id,
+        RecurringRuleInput {
+            day_of_month: Some(1),
+            ..input_expense(account_id, category_id)
+        },
+    )
+    .unwrap();
+
+    let result =
+        recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 4, 15), NOW).unwrap();
+
+    // 4/1 は 4/1 の展開時点で「発生しない日」だった。編集がそれを蒸し返さない。
+    assert_eq!(
+        occurred_dates(&conn),
+        vec!["2026-01-27", "2026-02-27", "2026-03-27"]
+    );
+    assert_eq!(result.generated, 0);
+
+    // 次の 5/1 は新しいスケジュールどおり生成される。
+    let next =
+        recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 5, 2), NOW).unwrap();
+    assert_eq!(next.generated, 1);
+    assert_eq!(
+        occurred_dates(&conn),
+        vec!["2026-01-27", "2026-02-27", "2026-03-27", "2026-05-01"]
+    );
+}
+
+/// import_json は watermark を検証しないので、today より先の値を持つ行が入りうる。
+/// 展開はそれを today まで引き戻してはならない (引き戻すと同じ日を二重生成する)。
+#[test]
+fn a_watermark_already_in_the_future_is_not_pulled_back() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    let rule =
+        recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+    recurring_repo::set_last_generated_on(&conn, rule.id, "2026-12-31").unwrap();
+
+    let result =
+        recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 4, 1), NOW).unwrap();
+
+    assert_eq!(result.generated, 0);
+    assert_eq!(tx_count(&conn), 0);
+    let stored = recurring_repo::find_by_id(&conn, rule.id).unwrap();
+    assert_eq!(stored.last_generated_on.as_deref(), Some("2026-12-31"));
 }
 
 #[test]
@@ -805,7 +918,9 @@ fn pausing_a_rule_leaves_the_watermark_untouched() {
 
     let stored = recurring_repo::find_by_id(&conn, rule.id).unwrap();
     assert!(!stored.active);
-    assert_eq!(stored.last_generated_on.as_deref(), Some("2026-02-27"));
+    // 2/28 の展開が watermark を today (2/28) まで進めている。停止はそこから
+    // 一切動かさない。6/1 に引きずられないことがこのテストの主張。
+    assert_eq!(stored.last_generated_on.as_deref(), Some("2026-02-28"));
 }
 
 #[test]

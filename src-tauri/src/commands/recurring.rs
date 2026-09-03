@@ -427,7 +427,8 @@ fn classify_skip(conn: &Connection, rule: &RecurringRule) -> AppResult<Option<Sk
 
 /// `active = 1` の全ルールについて `(last_generated_on, today]` を展開する。
 ///
-/// 参照先が使えないルールは飛ばし、`last_generated_on` も進めない。
+/// 展開できたルールは、生成が 0 件でも `last_generated_on` を `today` まで進める。
+/// 参照先が使えないルールだけは飛ばし、`last_generated_on` も進めない。
 /// ユーザーが参照先を直せば、次回展開で見送った期間が遡って埋まる。
 pub fn expand_due_recurring_for_conn(
     conn: &Connection,
@@ -453,20 +454,33 @@ pub fn expand_due_recurring_for_conn(
         let schedule = rule.schedule()?;
         let after = rule.generated_through()?;
         let dates = recurring::occurrences_between(&schedule, after, today);
+
+        // watermark は「最後に生成した日」ではなく「どこまで調べ終えたか」。生成が
+        // 0 件でも today まで進める。`occurrences_between` が返す日付は窓
+        // `(after, today]` の定義から必ず today 以下なので、today まで進めても
+        // 発生日を飛ばすことはない。
+        //
+        // 逆に最後の発生日で止めると watermark が時計から遅れ続け、そのあと
+        // ユーザーがルールの発生日を変えたとき、次の窓が「もう締めた期間」まで
+        // 遡って過去日の取引を生んでしまう (3/27 で止めたまま 4/15 に「毎月 1 日」
+        // へ付け替えると 4/1 が生える)。ルールの編集はこれから先の生成にだけ効く。
+        //
+        // `max` を取るのは、import_json 経由で today より先の watermark を持つ行が
+        // 入りうるため。巻き戻すと同じ日を二重生成する。
+        let watermark = iso(after.map_or(today, |previous| previous.max(today)));
+        recurring_repo::set_last_generated_on(conn, rule.id, &watermark)?;
+
         if dates.is_empty() {
             continue;
         }
 
         recurring_repo::insert_generated(conn, &rule, &dates, now)?;
-        let last = iso(dates[dates.len() - 1]);
-        recurring_repo::set_last_generated_on(conn, rule.id, &last)?;
-
         result.generated += dates.len() as i64;
         result.rules.push(RuleExpansion {
             rule_id: rule.id,
             rule_name: rule.name,
             generated: dates.len() as i64,
-            last_generated_on: last,
+            last_generated_on: watermark,
         });
     }
 
