@@ -824,3 +824,146 @@ fn append_importing_a_snapshot_into_its_own_db_keeps_one_recurring_rule() {
         vec!["2026-05-25", "2026-06-25", "2026-07-25"]
     );
 }
+
+/// 「サブスク / 支出 / 1,000 円 / 毎月 25 日 / 現金」で、カテゴリだけ違うルール。
+fn db_with_subscription_rule(category_name: &str) -> Connection {
+    let mut conn = Connection::open_in_memory().unwrap();
+    migrations::run(&mut conn).unwrap();
+    let account_id = account_repo::insert(
+        &conn,
+        &account_repo::InsertInput {
+            name: "現金",
+            kind: AccountKind::Cash,
+            currency: "JPY",
+            initial_balance: 1_000,
+            display_order: 0,
+            note: "",
+            now: NOW,
+        },
+    )
+    .unwrap();
+    let category_id = category_repo::insert(
+        &conn,
+        &category_repo::InsertInput {
+            name: category_name,
+            type_: CategoryType::Expense,
+            color: Some("#FF0000"),
+            icon: None,
+            display_order: 0,
+        },
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO recurring_rules(name, type, amount, account_id, counter_account_id,
+                                     category_id, description, frequency, day_of_month,
+                                     starts_on, active)
+         VALUES('サブスク', 'expense', 1000, ?1, NULL, ?2, '', 'monthly', 25, '2026-05-01', 1)",
+        params![account_id, category_id],
+    )
+    .unwrap();
+    conn
+}
+
+/// 「振替 / 50,000 円 / 毎月 25 日 / 現金 → `destination`」で、振替先だけ違うルール。
+fn db_with_transfer_rule(destination: &str) -> Connection {
+    let mut conn = Connection::open_in_memory().unwrap();
+    migrations::run(&mut conn).unwrap();
+    let account_id = account_repo::insert(
+        &conn,
+        &account_repo::InsertInput {
+            name: "現金",
+            kind: AccountKind::Cash,
+            currency: "JPY",
+            initial_balance: 1_000,
+            display_order: 0,
+            note: "",
+            now: NOW,
+        },
+    )
+    .unwrap();
+    let counter_id = account_repo::insert(
+        &conn,
+        &account_repo::InsertInput {
+            name: destination,
+            kind: AccountKind::Bank,
+            currency: "JPY",
+            initial_balance: 0,
+            display_order: 1,
+            note: "",
+            now: NOW,
+        },
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO recurring_rules(name, type, amount, account_id, counter_account_id,
+                                     category_id, description, frequency, day_of_month,
+                                     starts_on, active)
+         VALUES('振替', 'transfer', 50000, ?1, ?2, NULL, '', 'monthly', 25, '2026-05-01', 1)",
+        params![account_id, counter_id],
+    )
+    .unwrap();
+    conn
+}
+
+fn names_of(conn: &Connection, sql: &str) -> Vec<String> {
+    conn.prepare(sql)
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect()
+}
+
+/// 重複判定はカテゴリまで見る。名前・金額・周期・口座が同じでもカテゴリが違えば
+/// 別のルールなので、他の DB からの追記で取りこぼしてはならない。
+#[test]
+fn append_import_keeps_a_rule_that_differs_only_by_category() {
+    let mut target = db_with_subscription_rule("食費");
+    let source = db_with_subscription_rule("交通費");
+    let snapshot = backup::export_snapshot_json(&source).unwrap();
+
+    let result = backup::import_snapshot_json(&mut target, &snapshot, "append").unwrap();
+
+    assert_eq!(count(&target, "recurring_rules"), 2);
+    assert_eq!(result.recurring_rules, 1);
+    assert!(
+        !result
+            .warnings
+            .iter()
+            .any(|w| w.contains("duplicate recurring rule")),
+        "{:?}",
+        result.warnings
+    );
+    assert_eq!(
+        names_of(
+            &target,
+            "SELECT c.name FROM recurring_rules r
+               JOIN categories c ON c.id = r.category_id
+              ORDER BY c.name"
+        ),
+        vec!["交通費", "食費"]
+    );
+}
+
+/// 振替先が違えば別のルール。振替先は口座 id ではなく口座行の同一性で見るので、
+/// 追記が口座を複製したあとでも取り違えない。
+#[test]
+fn append_import_keeps_a_transfer_rule_that_differs_only_by_destination() {
+    let mut target = db_with_transfer_rule("銀行A");
+    let source = db_with_transfer_rule("銀行B");
+    let snapshot = backup::export_snapshot_json(&source).unwrap();
+
+    let result = backup::import_snapshot_json(&mut target, &snapshot, "append").unwrap();
+
+    assert_eq!(count(&target, "recurring_rules"), 2);
+    assert_eq!(result.recurring_rules, 1);
+    assert_eq!(
+        names_of(
+            &target,
+            "SELECT a.name FROM recurring_rules r
+               JOIN accounts a ON a.id = r.counter_account_id
+              ORDER BY a.name"
+        ),
+        vec!["銀行A", "銀行B"]
+    );
+}
