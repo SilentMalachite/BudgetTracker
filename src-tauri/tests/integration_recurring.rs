@@ -445,6 +445,12 @@ fn expanding_day_by_day_matches_one_big_catch_up() {
             .map(|r| r.unwrap())
             .collect()
     };
+    // 両方とも空なら比較は素通りしてしまう。日々の展開が実際に 3 件書いたことを
+    // 先に固定して、冪等性の主張が空振りで通らないようにする。
+    assert_eq!(
+        dates(&stepwise),
+        vec!["2026-01-27", "2026-02-27", "2026-03-27"]
+    );
     assert_eq!(dates(&stepwise), dates(&at_once));
 }
 
