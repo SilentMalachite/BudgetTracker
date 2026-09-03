@@ -3,6 +3,7 @@ pub mod account;
 pub mod date;
 pub mod ledger;
 pub mod report;
+pub mod recurring;
 pub mod seed;
 pub mod balance;
 pub mod budget;
