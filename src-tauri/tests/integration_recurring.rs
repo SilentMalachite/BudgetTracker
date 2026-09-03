@@ -95,7 +95,7 @@ fn list_hides_inactive_rules_unless_asked() {
     let (account_id, _, category_id) = seed(&conn);
     let id = recurring_repo::insert(&conn, &monthly_rent(account_id, category_id)).unwrap();
 
-    recurring_repo::set_active(&conn, id, false).unwrap();
+    recurring_repo::set_active(&conn, id, false, "2026-05-25").unwrap();
 
     assert!(recurring_repo::list(&conn, false).unwrap().is_empty());
     assert_eq!(recurring_repo::list(&conn, true).unwrap().len(), 1);
@@ -107,7 +107,7 @@ fn set_active_never_deletes_the_row() {
     let (account_id, _, category_id) = seed(&conn);
     let id = recurring_repo::insert(&conn, &monthly_rent(account_id, category_id)).unwrap();
 
-    recurring_repo::set_active(&conn, id, false).unwrap();
+    recurring_repo::set_active(&conn, id, false, "2026-05-25").unwrap();
 
     let rule = recurring_repo::find_by_id(&conn, id).unwrap();
     assert!(!rule.active);
@@ -514,13 +514,80 @@ fn an_archived_category_skips_the_rule() {
     assert_eq!(result.skipped.len(), 1);
 }
 
+/// 停止は spec の論理削除 (`active = 0`)。再開したときに、停止していた期間の
+/// 家賃をまとめて後付けで課金してはならない。
+#[test]
+fn resuming_a_paused_rule_does_not_backfill_the_paused_months() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    let rule =
+        recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+
+    // 1〜2 月分を展開して watermark を 2026-02-27 にする。
+    recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 2, 28), NOW).unwrap();
+    assert_eq!(tx_count(&conn), 2);
+
+    // 3 月頭に停止し、4 か月後に再開する。
+    recurring_repo::set_active(&conn, rule.id, false, "2026-03-01").unwrap();
+    recurring_repo::set_active(&conn, rule.id, true, "2026-07-15").unwrap();
+
+    let result =
+        recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 7, 15), NOW).unwrap();
+
+    // 停止中に飛ばした 3/27・4/27・5/27・6/27 は生成されない。
+    assert_eq!(result.generated, 0);
+    assert_eq!(tx_count(&conn), 2);
+    // 再開時点で watermark は今日まで進んでいる。
+    let stored = recurring_repo::find_by_id(&conn, rule.id).unwrap();
+    assert_eq!(stored.last_generated_on.as_deref(), Some("2026-07-15"));
+}
+
+/// 一度も生成していないルールは preview が約束した starts_on からの backfill を
+/// 保つ。停止→再開が「保存直後の生成」を取り消してはならない。
+#[test]
+fn resuming_a_rule_that_never_generated_still_backfills_from_starts_on() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    let rule =
+        recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+
+    recurring_repo::set_active(&conn, rule.id, false, "2026-02-01").unwrap();
+    recurring_repo::set_active(&conn, rule.id, true, "2026-04-01").unwrap();
+
+    let stored = recurring_repo::find_by_id(&conn, rule.id).unwrap();
+    assert_eq!(stored.last_generated_on, None);
+
+    let result =
+        recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 4, 1), NOW).unwrap();
+
+    assert_eq!(result.generated, 3);
+    assert_eq!(tx_count(&conn), 3);
+}
+
+/// 停止そのものは watermark を動かさない。停止中に日付が進んでも、再開するまでは
+/// 「どこまで生成したか」の記録がずれない。
+#[test]
+fn pausing_a_rule_leaves_the_watermark_untouched() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    let rule =
+        recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+    recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 2, 28), NOW).unwrap();
+
+    recurring_repo::set_active(&conn, rule.id, false, "2026-06-01").unwrap();
+
+    let stored = recurring_repo::find_by_id(&conn, rule.id).unwrap();
+    assert!(!stored.active);
+    assert_eq!(stored.last_generated_on.as_deref(), Some("2026-02-27"));
+}
+
 #[test]
 fn an_inactive_rule_is_not_expanded_at_all() {
     let conn = fresh();
     let (account_id, _, category_id) = seed(&conn);
     let rule =
         recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
-    recurring_repo::set_active(&conn, rule.id, false).unwrap();
+    recurring_repo::set_active(&conn, rule.id, false, "2026-05-25").unwrap();
 
     let result =
         recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 4, 1), NOW).unwrap();
