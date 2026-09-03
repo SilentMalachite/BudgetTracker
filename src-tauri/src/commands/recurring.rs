@@ -286,3 +286,135 @@ pub fn set_recurring_rule_active(
     emit_changed(&app, ChangedDomain::Recurring);
     Ok(rule)
 }
+
+fn now_iso() -> String {
+    chrono::Utc::now().to_rfc3339()
+}
+
+/// ルールを展開できない理由。どれも「ユーザーが参照先を直せば解消する」もの。
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkipReason {
+    ArchivedAccount,
+    ArchivedCounterAccount,
+    ArchivedCategory,
+    CategoryTypeMismatch,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SkippedRule {
+    pub rule_id: i64,
+    pub rule_name: String,
+    pub reason: SkipReason,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RuleExpansion {
+    pub rule_id: i64,
+    pub rule_name: String,
+    pub generated: i64,
+    pub last_generated_on: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ExpansionResult {
+    pub generated: i64,
+    pub rules: Vec<RuleExpansion>,
+    pub skipped: Vec<SkippedRule>,
+}
+
+/// 参照先が使えるか。使えないなら理由を返す。
+fn classify_skip(conn: &Connection, rule: &RecurringRule) -> AppResult<Option<SkipReason>> {
+    let account = account_repo::find_by_id(conn, rule.account_id)?;
+    if account.archived_at.is_some() {
+        return Ok(Some(SkipReason::ArchivedAccount));
+    }
+
+    if let Some(counter_id) = rule.counter_account_id {
+        let counter = account_repo::find_by_id(conn, counter_id)?;
+        if counter.archived_at.is_some() {
+            return Ok(Some(SkipReason::ArchivedCounterAccount));
+        }
+    }
+
+    if let Some(category_id) = rule.category_id {
+        let category = category_repo::find_by_id(conn, category_id)?;
+        if category.archived_at.is_some() {
+            return Ok(Some(SkipReason::ArchivedCategory));
+        }
+        if assert_category_matches_tx(&category, rule.type_, None).is_err() {
+            return Ok(Some(SkipReason::CategoryTypeMismatch));
+        }
+    }
+
+    Ok(None)
+}
+
+/// `active = 1` の全ルールについて `(last_generated_on, today]` を展開する。
+///
+/// 参照先が使えないルールは飛ばし、`last_generated_on` も進めない。
+/// ユーザーが参照先を直せば、次回展開で見送った期間が遡って埋まる。
+pub fn expand_due_recurring_for_conn(
+    conn: &Connection,
+    today: NaiveDate,
+    now: &str,
+) -> AppResult<ExpansionResult> {
+    let mut result = ExpansionResult {
+        generated: 0,
+        rules: Vec::new(),
+        skipped: Vec::new(),
+    };
+
+    for rule in recurring_repo::list(conn, false)? {
+        if let Some(reason) = classify_skip(conn, &rule)? {
+            result.skipped.push(SkippedRule {
+                rule_id: rule.id,
+                rule_name: rule.name,
+                reason,
+            });
+            continue;
+        }
+
+        let schedule = rule.schedule()?;
+        let after = rule.generated_through()?;
+        let dates = recurring::occurrences_between(&schedule, after, today);
+        if dates.is_empty() {
+            continue;
+        }
+
+        recurring_repo::insert_generated(conn, &rule, &dates, now)?;
+        let last = iso(dates[dates.len() - 1]);
+        recurring_repo::set_last_generated_on(conn, rule.id, &last)?;
+
+        result.generated += dates.len() as i64;
+        result.rules.push(RuleExpansion {
+            rule_id: rule.id,
+            rule_name: rule.name,
+            generated: dates.len() as i64,
+            last_generated_on: last,
+        });
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn expand_due_recurring(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<ExpansionResult> {
+    let today = chrono::Local::now().date_naive();
+    let now = now_iso();
+    let result = state.with_conn_mut(|conn| {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let result = expand_due_recurring_for_conn(&tx, today, &now)?;
+        tx.commit()?;
+        Ok(result)
+    })?;
+
+    if result.generated > 0 {
+        emit_changed(&app, ChangedDomain::Transactions);
+        emit_changed(&app, ChangedDomain::Recurring);
+    }
+    Ok(result)
+}

@@ -70,6 +70,7 @@ pub fn run() {
             commands::recurring::update_recurring_rule,
             commands::recurring::set_recurring_rule_active,
             commands::recurring::preview_recurring_occurrences,
+            commands::recurring::expand_due_recurring,
             commands::backup::export_json,
             commands::backup::import_json,
             commands::settings::get_last_backup_at,
