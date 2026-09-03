@@ -715,6 +715,58 @@ fn import_rejects_recurring_rule_with_day_of_week_out_of_range() {
     assert_import_rejected(&payload, "recurring_rule[0]", "day_of_week");
 }
 
+// A rule whose frequency and day column disagree still satisfies every V001
+// CHECK, so nothing but this validator stands between a hand-edited backup and
+// a rule that generates on a day the user never chose (`occurrences_between`
+// falls back to `starts_on`'s weekday / day-of-month by design).
+#[test]
+fn import_rejects_weekly_recurring_rule_without_a_day_of_week() {
+    let payload = payload(
+        &category_json("expense", "null"),
+        CASH_ACCOUNT_JSON,
+        &recurring_rule_json("weekly", "null", "null", "2026-05-01", "null"),
+        "",
+        "",
+    );
+    assert_import_rejected(&payload, "recurring_rule[0]", "day_of_week");
+}
+
+#[test]
+fn import_rejects_weekly_recurring_rule_carrying_a_day_of_month() {
+    let payload = payload(
+        &category_json("expense", "null"),
+        CASH_ACCOUNT_JSON,
+        &recurring_rule_json("weekly", "25", "3", "2026-05-01", "null"),
+        "",
+        "",
+    );
+    assert_import_rejected(&payload, "recurring_rule[0]", "day_of_month");
+}
+
+#[test]
+fn import_rejects_monthly_recurring_rule_without_a_day_of_month() {
+    let payload = payload(
+        &category_json("expense", "null"),
+        CASH_ACCOUNT_JSON,
+        &recurring_rule_json("monthly", "null", "null", "2026-05-01", "null"),
+        "",
+        "",
+    );
+    assert_import_rejected(&payload, "recurring_rule[0]", "day_of_month");
+}
+
+#[test]
+fn import_rejects_yearly_recurring_rule_carrying_a_day_of_week() {
+    let payload = payload(
+        &category_json("expense", "null"),
+        CASH_ACCOUNT_JSON,
+        &recurring_rule_json("yearly", "25", "3", "2026-05-01", "null"),
+        "",
+        "",
+    );
+    assert_import_rejected(&payload, "recurring_rule[0]", "day_of_week");
+}
+
 #[test]
 fn import_rejects_recurring_rule_with_non_canonical_starts_on() {
     let payload = payload(
