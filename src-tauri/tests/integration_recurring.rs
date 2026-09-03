@@ -603,3 +603,73 @@ fn generated_transfers_stay_out_of_the_income_expense_totals() {
     assert_eq!(counted, 0);
     assert_eq!(tx_count(&conn), 1);
 }
+
+#[test]
+fn a_rule_with_a_broken_type_and_category_pairing_is_skipped_not_fatal() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+
+    // import_json のように、コマンド層をバイパスして直接 INSERT する。
+    // type='expense' なのに category_id が NULL は transactions の CHECK に反する組み合わせ。
+    conn.execute(
+        "INSERT INTO recurring_rules(name, type, amount, account_id, counter_account_id,
+                                     category_id, description, frequency, day_of_month,
+                                     day_of_week, starts_on, ends_on, last_generated_on, active)
+         VALUES ('壊れたルール', 'expense', 1000, ?1, NULL, NULL, '', 'monthly', 27, NULL,
+                 '2026-01-27', NULL, NULL, 1)",
+        params![account_id],
+    )
+    .unwrap();
+    let broken_id = conn.last_insert_rowid();
+
+    let result =
+        recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 4, 1), NOW).unwrap();
+
+    assert_eq!(result.generated, 3);
+    assert_eq!(tx_count(&conn), 3);
+    assert_eq!(result.rules.len(), 1);
+    assert_eq!(result.skipped.len(), 1);
+    assert_eq!(result.skipped[0].rule_id, broken_id);
+    assert!(matches!(
+        result.skipped[0].reason,
+        recurring_cmd::SkipReason::MalformedRule
+    ));
+
+    let stored = recurring_repo::find_by_id(&conn, broken_id).unwrap();
+    assert_eq!(stored.last_generated_on, None);
+}
+
+#[test]
+fn a_rule_pointing_at_a_missing_account_is_skipped_not_fatal() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+
+    // 実運用では FK が ON なのでこの状態は起こらないが、破損データ (import_json 由来の
+    // 孤立行など) を想定して、この 1 件の INSERT だけ FK を切って作る。
+    conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+    conn.execute(
+        "INSERT INTO recurring_rules(name, type, amount, account_id, counter_account_id,
+                                     category_id, description, frequency, day_of_month,
+                                     day_of_week, starts_on, ends_on, last_generated_on, active)
+         VALUES ('存在しない口座', 'expense', 1000, 9999, NULL, ?1, '', 'monthly', 27, NULL,
+                 '2026-01-27', NULL, NULL, 1)",
+        params![category_id],
+    )
+    .unwrap();
+    let broken_id = conn.last_insert_rowid();
+
+    let result =
+        recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 4, 1), NOW).unwrap();
+
+    assert_eq!(result.generated, 3);
+    assert_eq!(tx_count(&conn), 3);
+    assert_eq!(result.rules.len(), 1);
+    assert_eq!(result.skipped.len(), 1);
+    assert_eq!(result.skipped[0].rule_id, broken_id);
+    assert!(matches!(
+        result.skipped[0].reason,
+        recurring_cmd::SkipReason::MalformedRule
+    ));
+}

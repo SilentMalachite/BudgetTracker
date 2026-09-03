@@ -9,11 +9,11 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
 use crate::commands::meta::AppState;
-use crate::domain::ledger::{assert_account_writable, assert_category_matches_tx};
+use crate::domain::ledger::{assert_account_writable, assert_category_matches_tx, TxType};
 use crate::domain::recurring::{
     self, RawRuleInput, RecurringRule, ValidatedRule,
 };
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::infra::events::{emit_changed, ChangedDomain};
 use crate::infra::repo::{account_repo, category_repo, recurring_repo};
 
@@ -299,6 +299,11 @@ pub enum SkipReason {
     ArchivedCounterAccount,
     ArchivedCategory,
     CategoryTypeMismatch,
+    /// ルール自身の形が壊れている (type と counter_account_id/category_id の組み合わせが
+    /// transactions の CHECK を満たさない、または参照先の行が存在しない)。
+    /// `recurring_rules` には `transactions` と同じ CHECK が無いため、import_json 経由で
+    /// 作られうる。ユーザーがルールを直す (または削除する) までスキップし続ける。
+    MalformedRule,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -323,22 +328,55 @@ pub struct ExpansionResult {
     pub skipped: Vec<SkippedRule>,
 }
 
+/// `NotFound` はルール自身の破損として扱いスキップに変換する。それ以外のエラー
+/// (本物の DB 障害) はそのまま伝播させ、展開全体を止める。
+fn find_or_skip<T>(result: AppResult<T>) -> AppResult<Result<T, SkipReason>> {
+    match result {
+        Ok(value) => Ok(Ok(value)),
+        Err(AppError::NotFound(_)) => Ok(Err(SkipReason::MalformedRule)),
+        Err(e) => Err(e),
+    }
+}
+
 /// 参照先が使えるか。使えないなら理由を返す。
 fn classify_skip(conn: &Connection, rule: &RecurringRule) -> AppResult<Option<SkipReason>> {
-    let account = account_repo::find_by_id(conn, rule.account_id)?;
+    // transactions の CHECK (`type='transfer'` なら counter_account_id 必須・category_id NULL、
+    // それ以外なら category_id 必須・counter_account_id NULL) を、DB に書く前に自分で確認する。
+    // recurring_rules にはこの CHECK が無く、import_json 経由で組み合わせが壊れた行が
+    // 入りうるため。
+    let shape_ok = match rule.type_ {
+        TxType::Transfer => rule.counter_account_id.is_some() && rule.category_id.is_none(),
+        TxType::Income | TxType::Expense => {
+            rule.category_id.is_some() && rule.counter_account_id.is_none()
+        }
+    };
+    if !shape_ok {
+        return Ok(Some(SkipReason::MalformedRule));
+    }
+
+    let account = match find_or_skip(account_repo::find_by_id(conn, rule.account_id))? {
+        Ok(account) => account,
+        Err(reason) => return Ok(Some(reason)),
+    };
     if account.archived_at.is_some() {
         return Ok(Some(SkipReason::ArchivedAccount));
     }
 
     if let Some(counter_id) = rule.counter_account_id {
-        let counter = account_repo::find_by_id(conn, counter_id)?;
+        let counter = match find_or_skip(account_repo::find_by_id(conn, counter_id))? {
+            Ok(counter) => counter,
+            Err(reason) => return Ok(Some(reason)),
+        };
         if counter.archived_at.is_some() {
             return Ok(Some(SkipReason::ArchivedCounterAccount));
         }
     }
 
     if let Some(category_id) = rule.category_id {
-        let category = category_repo::find_by_id(conn, category_id)?;
+        let category = match find_or_skip(category_repo::find_by_id(conn, category_id))? {
+            Ok(category) => category,
+            Err(reason) => return Ok(Some(reason)),
+        };
         if category.archived_at.is_some() {
             return Ok(Some(SkipReason::ArchivedCategory));
         }
