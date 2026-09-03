@@ -276,9 +276,12 @@ pub fn set_recurring_rule_active(
     id: i64,
     active: bool,
 ) -> AppResult<RecurringRule> {
+    // 時計はコマンド層で読む (repo は今日を知らない)。再開時に watermark を
+    // 進めるのに使う。
+    let today = iso(chrono::Local::now().date_naive());
     let rule = state.with_conn_mut(|conn| {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        recurring_repo::set_active(&tx, id, active)?;
+        recurring_repo::set_active(&tx, id, active, &today)?;
         let rule = recurring_repo::find_by_id(&tx, id)?;
         tx.commit()?;
         Ok(rule)

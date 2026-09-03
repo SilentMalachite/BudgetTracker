@@ -161,11 +161,36 @@ pub fn update(conn: &Connection, id: i64, input: &UpdateInput<'_>) -> AppResult<
 }
 
 /// 停止 / 再開。行は消さない (規約 5)。
-pub fn set_active(conn: &Connection, id: i64, active: bool) -> AppResult<()> {
-    let changed = conn.execute(
-        "UPDATE recurring_rules SET active = ?2 WHERE id = ?1",
-        params![id, i64::from(active)],
-    )?;
+///
+/// 再開 (`active = true`) は `last_generated_on` を `today` まで進める。展開の窓は
+/// `(last_generated_on, today]` なので、そうしないと停止中に見送った分が再開の瞬間に
+/// まとめて生成され、締めた月の予算とレポートを後から書き換えてしまう。
+///
+/// ただし一度も生成していないルール (`last_generated_on IS NULL`) は NULL のまま
+/// にする。保存前の preview が「今すぐ N 件生成されます」と約束した starts_on から
+/// の backfill は、停止→再開をはさんでも残さなければならない。
+/// watermark を巻き戻さないよう、`today` より先の値も動かさない。
+///
+/// 停止 (`active = false`) は watermark に一切触れない。
+pub fn set_active(conn: &Connection, id: i64, active: bool, today: &str) -> AppResult<()> {
+    let changed = if active {
+        conn.execute(
+            "UPDATE recurring_rules
+                SET active = 1,
+                    last_generated_on = CASE
+                        WHEN last_generated_on IS NULL THEN NULL
+                        WHEN last_generated_on > ?2 THEN last_generated_on
+                        ELSE ?2
+                    END
+              WHERE id = ?1",
+            params![id, today],
+        )?
+    } else {
+        conn.execute(
+            "UPDATE recurring_rules SET active = 0 WHERE id = ?1",
+            params![id],
+        )?
+    };
     if changed == 0 {
         return Err(AppError::NotFound(format!("recurring rule {id}")));
     }
