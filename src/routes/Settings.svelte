@@ -2,8 +2,13 @@
   import { onMount } from 'svelte';
   import Button from '../lib/components/Button.svelte';
   import Card from '../lib/components/Card.svelte';
-  import { exportJson, importJson, type ImportMode, type ImportResult } from '../lib/api/backup';
-  import { getDbPath, getLastBackupAt, setLastBackupAt } from '../lib/api/settings';
+  import {
+    exportBackupToFile,
+    importJson,
+    type ImportMode,
+    type ImportResult
+  } from '../lib/api/backup';
+  import { getDbPath, getLastBackupAt } from '../lib/api/settings';
 
   let dbPath = $state('');
   let lastBackup = $state<string | null>(null);
@@ -31,20 +36,13 @@
     warnings = [];
     importStats = null;
     try {
-      const json = await exportJson();
-      const blob = new Blob([json], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-      link.href = url;
-      link.download = `budget-backup-${stamp}.json`;
-      link.click();
-      URL.revokeObjectURL(url);
-
-      const now = new Date().toISOString();
-      await setLastBackupAt(now);
-      lastBackup = now;
-      message = 'バックアップを書き出しました';
+      // The save dialog and the write happen in Rust; last_backup_at is only
+      // recorded once the file exists, so a cancelled dialog changes nothing.
+      const result = await exportBackupToFile();
+      if (result) {
+        lastBackup = result.last_backup_at;
+        message = `バックアップを保存しました: ${result.path}`;
+      }
     } catch (e) {
       message = `エクスポート失敗: ${e instanceof Error ? e.message : String(e)}`;
     } finally {

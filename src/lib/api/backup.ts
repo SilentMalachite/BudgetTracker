@@ -10,8 +10,14 @@ export type ImportResult = {
   warnings: string[];
 };
 
-export function exportJson(): Promise<string> {
-  return invoke<string>('export_json');
+export type BackupFileResult = {
+  path: string;
+  last_backup_at: string;
+};
+
+/** Opens the native save dialog and writes the backup. Resolves to null when cancelled. */
+export function exportBackupToFile(): Promise<BackupFileResult | null> {
+  return invoke<BackupFileResult | null>('export_backup_to_file');
 }
 
 export function importJson(payload: string, mode: ImportMode): Promise<ImportResult> {

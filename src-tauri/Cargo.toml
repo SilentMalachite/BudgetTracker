@@ -25,6 +25,7 @@ base64 = "0.22"
 rand = "0.8"
 include_dir = "0.7"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+tauri-plugin-dialog = "2"
 
 [dev-dependencies]
 proptest = "1"

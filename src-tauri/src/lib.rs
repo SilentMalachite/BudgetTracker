@@ -12,6 +12,7 @@ use crate::commands::meta::{app_info, AppInner, AppState};
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
             let keys = crate::infra::boot::OsKeyStore {
@@ -67,7 +68,7 @@ pub fn run() {
             commands::backup::export_json,
             commands::backup::import_json,
             commands::settings::get_last_backup_at,
-            commands::settings::set_last_backup_at,
+            commands::settings::export_backup_to_file,
             commands::settings::get_db_path,
             commands::balances::list_balances,
         ])
