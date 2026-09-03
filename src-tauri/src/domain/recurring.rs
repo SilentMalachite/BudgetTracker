@@ -52,6 +52,56 @@ pub struct Schedule {
     pub ends_on: Option<NaiveDate>,
 }
 
+/// `recurring_rules` の 1 行。Tauri のレスポンスとしてそのまま返す。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecurringRule {
+    pub id: i64,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub type_: crate::domain::ledger::TxType,
+    pub amount: i64,
+    pub account_id: i64,
+    pub counter_account_id: Option<i64>,
+    pub category_id: Option<i64>,
+    pub description: String,
+    pub frequency: Frequency,
+    pub day_of_month: Option<u32>,
+    pub day_of_week: Option<u32>,
+    pub starts_on: String,
+    pub ends_on: Option<String>,
+    pub last_generated_on: Option<String>,
+    pub active: bool,
+}
+
+impl RecurringRule {
+    /// 保存済みの ISO 日付を解釈して日付列挙用の `Schedule` にする。
+    pub fn schedule(&self) -> AppResult<Schedule> {
+        let starts_on = crate::domain::date::parse_iso_date("starts_on", &self.starts_on)?;
+        let ends_on = match &self.ends_on {
+            Some(raw) => Some(crate::domain::date::parse_iso_date("ends_on", raw)?),
+            None => None,
+        };
+        Ok(Schedule {
+            frequency: self.frequency,
+            day_of_month: self.day_of_month,
+            day_of_week: self.day_of_week,
+            starts_on,
+            ends_on,
+        })
+    }
+
+    /// `last_generated_on` を窓の左端 (排他) として解釈する。未生成なら `None`。
+    pub fn generated_through(&self) -> AppResult<Option<NaiveDate>> {
+        match &self.last_generated_on {
+            Some(raw) => Ok(Some(crate::domain::date::parse_iso_date(
+                "last_generated_on",
+                raw,
+            )?)),
+            None => Ok(None),
+        }
+    }
+}
+
 /// `year`/`month` の末日。
 fn last_day_of_month(year: i32, month: u32) -> Option<u32> {
     let (next_year, next_month) = if month == 12 {
