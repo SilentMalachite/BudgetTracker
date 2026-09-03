@@ -322,3 +322,57 @@ fn update_rule_revalidates_the_new_shape() {
     let updated = recurring_cmd::update_rule_for_conn(&conn, rule.id, fixed).unwrap();
     assert_eq!(updated.amount, 90_000);
 }
+
+#[test]
+fn preview_counts_the_backfill_a_past_starts_on_would_create() {
+    // 2026-01-27 開始・毎月 27 日。today = 2026-05-01 なら 1〜4 月の 4 件。
+    let preview =
+        recurring_cmd::preview_for_input(&input_expense(1, 2), date(2026, 5, 1), 100).unwrap();
+
+    assert_eq!(preview.backfill_total, 4);
+    assert_eq!(
+        preview.backfill,
+        vec!["2026-01-27", "2026-02-27", "2026-03-27", "2026-04-27"]
+    );
+    assert!(!preview.truncated);
+}
+
+#[test]
+fn preview_truncates_the_backfill_at_the_limit_but_keeps_the_total() {
+    let preview =
+        recurring_cmd::preview_for_input(&input_expense(1, 2), date(2026, 5, 1), 2).unwrap();
+
+    assert_eq!(preview.backfill_total, 4);
+    assert_eq!(preview.backfill, vec!["2026-01-27", "2026-02-27"]);
+    assert!(preview.truncated);
+}
+
+#[test]
+fn preview_lists_the_next_three_upcoming_dates() {
+    let preview =
+        recurring_cmd::preview_for_input(&input_expense(1, 2), date(2026, 5, 1), 100).unwrap();
+
+    assert_eq!(preview.upcoming, vec!["2026-05-27", "2026-06-27", "2026-07-27"]);
+}
+
+#[test]
+fn preview_of_a_future_rule_has_no_backfill() {
+    let future = RecurringRuleInput {
+        starts_on: "2026-09-27".into(),
+        ..input_expense(1, 2)
+    };
+    let preview = recurring_cmd::preview_for_input(&future, date(2026, 5, 1), 100).unwrap();
+
+    assert_eq!(preview.backfill_total, 0);
+    assert!(preview.backfill.is_empty());
+    assert_eq!(preview.upcoming.first().map(String::as_str), Some("2026-09-27"));
+}
+
+#[test]
+fn preview_rejects_a_malformed_rule_without_touching_the_database() {
+    let broken = RecurringRuleInput {
+        frequency: "daily".into(),
+        ..input_expense(1, 2)
+    };
+    assert!(recurring_cmd::preview_for_input(&broken, date(2026, 5, 1), 100).is_err());
+}
