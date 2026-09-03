@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
 use crate::commands::meta::AppState;
-use crate::domain::ledger::{assert_account_writable, assert_category_matches_tx, TxType};
+use crate::domain::ledger::{
+    assert_account_writable, assert_category_matches_tx, AllowedArchivedRefs, TxType,
+};
 use crate::domain::recurring::{
     self, RawRuleInput, RecurringRule, ValidatedRule,
 };
@@ -126,18 +128,27 @@ fn validate(input: &RecurringRuleInput) -> AppResult<ValidatedRule> {
 }
 
 /// 参照先の口座 / カテゴリが実在し、アーカイブされておらず、種別が噛み合うか。
-fn assert_references_usable(conn: &Connection, rule: &ValidatedRule) -> AppResult<()> {
+///
+/// `allow` は「アーカイブ済みでも通してよい参照先」。新規作成は
+/// `AllowedArchivedRefs::none()`、更新は既存行が今指している参照先を渡す
+/// (`update_transaction` と同じ扱い)。そうしないと、口座を後からアーカイブされた
+/// ルールは展開でスキップされ続けるのに、付け替える編集すらできなくなる。
+fn assert_references_usable(
+    conn: &Connection,
+    rule: &ValidatedRule,
+    allow: &AllowedArchivedRefs,
+) -> AppResult<()> {
     let account = account_repo::find_by_id(conn, rule.account_id)?;
-    assert_account_writable(&account, None)?;
+    assert_account_writable(&account, allow.account_id)?;
 
     if let Some(counter_id) = rule.counter_account_id {
         let counter = account_repo::find_by_id(conn, counter_id)?;
-        assert_account_writable(&counter, None)?;
+        assert_account_writable(&counter, allow.counter_account_id)?;
     }
 
     if let Some(category_id) = rule.category_id {
         let category = category_repo::find_by_id(conn, category_id)?;
-        assert_category_matches_tx(&category, rule.type_, None)?;
+        assert_category_matches_tx(&category, rule.type_, allow.category_id)?;
     }
 
     Ok(())
@@ -165,7 +176,8 @@ pub fn create_rule_for_conn(
     input: RecurringRuleInput,
 ) -> AppResult<RecurringRule> {
     let validated = validate(&input)?;
-    assert_references_usable(conn, &validated)?;
+    // 新規作成はアーカイブ済みの参照先を一切認めない。
+    assert_references_usable(conn, &validated, &AllowedArchivedRefs::none())?;
 
     let starts_on = validated.starts_on_key();
     let ends_on = validated.ends_on_key();
@@ -182,7 +194,14 @@ pub fn update_rule_for_conn(
     input: RecurringRuleInput,
 ) -> AppResult<RecurringRule> {
     let validated = validate(&input)?;
-    assert_references_usable(conn, &validated)?;
+    // 今この行が指している参照先だけは、アーカイブ済みでも通す。
+    let existing = recurring_repo::find_by_id(conn, id)?;
+    let allow = AllowedArchivedRefs {
+        account_id: Some(existing.account_id),
+        category_id: existing.category_id,
+        counter_account_id: existing.counter_account_id,
+    };
+    assert_references_usable(conn, &validated, &allow)?;
 
     let starts_on = validated.starts_on_key();
     let ends_on = validated.ends_on_key();

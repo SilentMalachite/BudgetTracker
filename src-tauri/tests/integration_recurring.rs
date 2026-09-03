@@ -323,6 +323,98 @@ fn update_rule_revalidates_the_new_shape() {
     assert_eq!(updated.amount, 90_000);
 }
 
+/// 展開でスキップされたルールには、ユーザーが自力で抜け出せる道が要る。
+/// 参照先がアーカイブされた「後」の編集は、`update_transaction` と同じく
+/// 「今その行が指している参照先」だけは許す。そうでないと口座を戻す以外に
+/// 直しようがない (ルールの削除も無い)。
+#[test]
+fn a_rule_can_still_be_edited_after_its_account_was_archived() {
+    let conn = fresh();
+    let (account_id, counter_account_id, category_id) = seed(&conn);
+    let rule =
+        recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+    conn.execute(
+        "UPDATE accounts SET archived_at = ?1 WHERE id = ?2",
+        params![NOW, account_id],
+    )
+    .unwrap();
+
+    // 参照先を変えない編集は通る。
+    let updated = recurring_cmd::update_rule_for_conn(
+        &conn,
+        rule.id,
+        RecurringRuleInput {
+            amount: 90_000,
+            ..input_expense(account_id, category_id)
+        },
+    )
+    .unwrap();
+    assert_eq!(updated.amount, 90_000);
+
+    // 生きている口座への付け替えも通る。
+    let repointed = recurring_cmd::update_rule_for_conn(
+        &conn,
+        rule.id,
+        RecurringRuleInput {
+            account_id: counter_account_id,
+            ..input_expense(account_id, category_id)
+        },
+    )
+    .unwrap();
+    assert_eq!(repointed.account_id, counter_account_id);
+}
+
+/// アーカイブ済みのカテゴリを指したままでも編集できる。種別の不一致は従来どおり拒否。
+#[test]
+fn a_rule_can_still_be_edited_after_its_category_was_archived() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    let rule =
+        recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+    conn.execute(
+        "UPDATE categories SET archived_at = ?1 WHERE id = ?2",
+        params![NOW, category_id],
+    )
+    .unwrap();
+
+    let updated = recurring_cmd::update_rule_for_conn(
+        &conn,
+        rule.id,
+        RecurringRuleInput {
+            amount: 90_000,
+            ..input_expense(account_id, category_id)
+        },
+    )
+    .unwrap();
+    assert_eq!(updated.amount, 90_000);
+}
+
+/// 「今の参照先だから許す」であって「アーカイブ済みなら何でも許す」ではない。
+/// ルールが指していない別のアーカイブ済み口座には付け替えられない。
+#[test]
+fn an_update_cannot_repoint_a_rule_onto_a_different_archived_account() {
+    let conn = fresh();
+    let (account_id, counter_account_id, category_id) = seed(&conn);
+    let rule =
+        recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+    conn.execute(
+        "UPDATE accounts SET archived_at = ?1 WHERE id = ?2",
+        params![NOW, counter_account_id],
+    )
+    .unwrap();
+
+    let err = recurring_cmd::update_rule_for_conn(
+        &conn,
+        rule.id,
+        RecurringRuleInput {
+            account_id: counter_account_id,
+            ..input_expense(account_id, category_id)
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("archived"), "{err}");
+}
+
 #[test]
 fn preview_counts_the_backfill_a_past_starts_on_would_create() {
     // 2026-01-27 開始・毎月 27 日。today = 2026-05-01 なら 1〜4 月の 4 件。
