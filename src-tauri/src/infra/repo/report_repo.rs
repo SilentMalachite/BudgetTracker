@@ -2,16 +2,10 @@ use rusqlite::{params, Connection};
 use serde::Serialize;
 
 use crate::domain::report::MonthlyBucket;
+/// `CategoryAggregate` の正本は `domain::report`。ここから使う呼び出し元
+/// (`response_fixtures.rs` など) を壊さないよう再エクスポートする。
+pub use crate::domain::report::CategoryAggregate;
 use crate::error::{AppError, AppResult};
-
-#[derive(Debug, Serialize)]
-pub struct CategoryAggregate {
-    pub category_id: i64,
-    pub name: String,
-    #[serde(rename = "type")]
-    pub type_: String,
-    pub amount: i64,
-}
 
 #[derive(Debug, Serialize)]
 pub struct MonthlySummary {

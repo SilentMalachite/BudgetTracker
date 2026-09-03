@@ -46,6 +46,12 @@ impl YearMonth {
         let month = (total.rem_euclid(12) + 1) as u32;
         Self { year, month }
     }
+
+    /// 経過月数（`self` が後ならば正）。区間長の計算に使う。
+    pub fn months_since(self, earlier: Self) -> i64 {
+        (i64::from(self.year) * 12 + i64::from(self.month))
+            - (i64::from(earlier.year) * 12 + i64::from(earlier.month))
+    }
 }
 
 pub fn year_month_from_date(date: chrono::NaiveDate) -> YearMonth {
@@ -113,5 +119,17 @@ mod tests {
         let d = chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
         let ym = year_month_from_date(d);
         assert_eq!(ym.key(), "2026-06");
+    }
+
+    #[test]
+    fn months_since_counts_forward_and_backward() {
+        let may = YearMonth { year: 2026, month: 5 };
+        let mar = YearMonth { year: 2026, month: 3 };
+        let last_nov = YearMonth { year: 2025, month: 11 };
+
+        assert_eq!(may.months_since(mar), 2);
+        assert_eq!(mar.months_since(may), -2);
+        assert_eq!(may.months_since(last_nov), 6);
+        assert_eq!(may.months_since(may), 0);
     }
 }
