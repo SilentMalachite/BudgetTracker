@@ -321,8 +321,9 @@ pub enum SkipReason {
     ArchivedCounterAccount,
     ArchivedCategory,
     CategoryTypeMismatch,
-    /// ルール自身の形が壊れている (type と counter_account_id/category_id の組み合わせが
-    /// transactions の CHECK を満たさない、または参照先の行が存在しない)。
+    /// ルール自身の形が壊れている。type と counter_account_id/category_id の組み合わせが
+    /// transactions の CHECK を満たさない / 振替の相手が自分自身 / 周期と day_of_month・
+    /// day_of_week の組み合わせが噛み合わない / 参照先の行が存在しない、のいずれか。
     /// `recurring_rules` には `transactions` と同じ CHECK が無いため、import_json 経由で
     /// 作られうる。ユーザーがルールを直す (または削除する) までスキップし続ける。
     MalformedRule,
@@ -365,14 +366,28 @@ fn classify_skip(conn: &Connection, rule: &RecurringRule) -> AppResult<Option<Sk
     // transactions の CHECK (`type='transfer'` なら counter_account_id 必須・category_id NULL、
     // それ以外なら category_id 必須・counter_account_id NULL) を、DB に書く前に自分で確認する。
     // recurring_rules にはこの CHECK が無く、import_json 経由で組み合わせが壊れた行が
-    // 入りうるため。
+    // 入りうるため。同一口座間の振替は transactions の CHECK では捕まえられない
+    // (counter_account_id が NULL でないことしか見ていない) ので、ここで弾く。
     let shape_ok = match rule.type_ {
-        TxType::Transfer => rule.counter_account_id.is_some() && rule.category_id.is_none(),
+        TxType::Transfer => {
+            rule.counter_account_id
+                .is_some_and(|counter| counter != rule.account_id)
+                && rule.category_id.is_none()
+        }
         TxType::Income | TxType::Expense => {
             rule.category_id.is_some() && rule.counter_account_id.is_none()
         }
     };
-    if !shape_ok {
+    // 周期と日付列の組み合わせ。`occurrences_between` は day_of_week / day_of_month が
+    // 無ければ starts_on から推測する全域関数 (proptest で守られている) なので、
+    // 壊れたルールを弾くのは日付列挙側ではなくここ。
+    let schedule_ok = match rule.frequency {
+        recurring::Frequency::Weekly => rule.day_of_week.is_some() && rule.day_of_month.is_none(),
+        recurring::Frequency::Monthly | recurring::Frequency::Yearly => {
+            rule.day_of_month.is_some() && rule.day_of_week.is_none()
+        }
+    };
+    if !shape_ok || !schedule_ok {
         return Ok(Some(SkipReason::MalformedRule));
     }
 

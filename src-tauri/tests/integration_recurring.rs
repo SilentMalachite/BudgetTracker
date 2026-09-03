@@ -838,3 +838,107 @@ fn a_rule_pointing_at_a_missing_account_is_skipped_not_fatal() {
         recurring_cmd::SkipReason::MalformedRule
     ));
 }
+
+#[test]
+fn a_stored_self_transfer_rule_is_skipped_not_generated() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+
+    // import_json のように、コマンド層をバイパスして直接 INSERT する。
+    // 同じ口座への振替は validate_rule_input が弾くが、transactions の CHECK は
+    // counter_account_id が NULL でないことしか見ないので、生成は素通りしてしまう。
+    conn.execute(
+        "INSERT INTO recurring_rules(name, type, amount, account_id, counter_account_id,
+                                     category_id, description, frequency, day_of_month,
+                                     day_of_week, starts_on, ends_on, last_generated_on, active)
+         VALUES ('自分への振替', 'transfer', 1000, ?1, ?1, NULL, '', 'monthly', 27, NULL,
+                 '2026-01-27', NULL, NULL, 1)",
+        params![account_id],
+    )
+    .unwrap();
+    let broken_id = conn.last_insert_rowid();
+
+    let result =
+        recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 4, 1), NOW).unwrap();
+
+    assert_eq!(result.generated, 3);
+    assert_eq!(tx_count(&conn), 3);
+    assert_eq!(result.rules.len(), 1);
+    assert_eq!(result.skipped.len(), 1);
+    assert_eq!(result.skipped[0].rule_id, broken_id);
+    assert!(matches!(
+        result.skipped[0].reason,
+        recurring_cmd::SkipReason::MalformedRule
+    ));
+
+    // 直すまで見送り続ける。watermark も進めない。
+    let stored = recurring_repo::find_by_id(&conn, broken_id).unwrap();
+    assert_eq!(stored.last_generated_on, None);
+}
+
+#[test]
+fn a_stored_weekly_rule_without_a_weekday_is_skipped_not_generated() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+
+    // frequency='weekly' なのに day_of_week が NULL。occurrences_between は
+    // starts_on の曜日で補うので、ユーザーが選んでいない曜日で生成されてしまう。
+    conn.execute(
+        "INSERT INTO recurring_rules(name, type, amount, account_id, counter_account_id,
+                                     category_id, description, frequency, day_of_month,
+                                     day_of_week, starts_on, ends_on, last_generated_on, active)
+         VALUES ('曜日の無い毎週', 'expense', 1000, ?1, NULL, ?2, '', 'weekly', NULL, NULL,
+                 '2026-01-27', NULL, NULL, 1)",
+        params![account_id, category_id],
+    )
+    .unwrap();
+    let broken_id = conn.last_insert_rowid();
+
+    let result =
+        recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 4, 1), NOW).unwrap();
+
+    assert_eq!(result.generated, 3);
+    assert_eq!(tx_count(&conn), 3);
+    assert_eq!(result.rules.len(), 1);
+    assert_eq!(result.skipped.len(), 1);
+    assert_eq!(result.skipped[0].rule_id, broken_id);
+    assert!(matches!(
+        result.skipped[0].reason,
+        recurring_cmd::SkipReason::MalformedRule
+    ));
+
+    let stored = recurring_repo::find_by_id(&conn, broken_id).unwrap();
+    assert_eq!(stored.last_generated_on, None);
+}
+
+#[test]
+fn a_stored_monthly_rule_carrying_a_weekday_is_skipped_not_generated() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+
+    // monthly なのに day_of_week も持っている。どちらを守るべきか決められない。
+    conn.execute(
+        "INSERT INTO recurring_rules(name, type, amount, account_id, counter_account_id,
+                                     category_id, description, frequency, day_of_month,
+                                     day_of_week, starts_on, ends_on, last_generated_on, active)
+         VALUES ('曜日つきの毎月', 'expense', 1000, ?1, NULL, ?2, '', 'monthly', 27, 3,
+                 '2026-01-27', NULL, NULL, 1)",
+        params![account_id, category_id],
+    )
+    .unwrap();
+    let broken_id = conn.last_insert_rowid();
+
+    let result =
+        recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 4, 1), NOW).unwrap();
+
+    assert_eq!(result.generated, 3);
+    assert_eq!(result.skipped.len(), 1);
+    assert_eq!(result.skipped[0].rule_id, broken_id);
+    assert!(matches!(
+        result.skipped[0].reason,
+        recurring_cmd::SkipReason::MalformedRule
+    ));
+}
