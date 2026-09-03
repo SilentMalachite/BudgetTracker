@@ -376,3 +376,230 @@ fn preview_rejects_a_malformed_rule_without_touching_the_database() {
     };
     assert!(recurring_cmd::preview_for_input(&broken, date(2026, 5, 1), 100).is_err());
 }
+
+fn tx_count(conn: &Connection) -> i64 {
+    conn.query_row("SELECT COUNT(*) FROM transactions", [], |r| r.get(0))
+        .unwrap()
+}
+
+#[test]
+fn expansion_generates_every_missed_date_from_starts_on() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+
+    let result =
+        recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 4, 1), NOW).unwrap();
+
+    // 1/27, 2/27, 3/27 の 3 件。4/27 はまだ来ていない。
+    assert_eq!(result.generated, 3);
+    assert_eq!(tx_count(&conn), 3);
+    assert_eq!(result.rules.len(), 1);
+    assert_eq!(result.rules[0].generated, 3);
+    assert_eq!(result.rules[0].last_generated_on, "2026-03-27");
+    assert!(result.skipped.is_empty());
+}
+
+#[test]
+fn expanding_twice_on_the_same_day_generates_nothing_the_second_time() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+
+    recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 4, 1), NOW).unwrap();
+    let second =
+        recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 4, 1), NOW).unwrap();
+
+    assert_eq!(second.generated, 0);
+    assert!(second.rules.is_empty());
+    assert_eq!(tx_count(&conn), 3);
+}
+
+#[test]
+fn expanding_day_by_day_matches_one_big_catch_up() {
+    let stepwise = fresh();
+    let (a1, _, c1) = seed(&stepwise);
+    recurring_cmd::create_rule_for_conn(&stepwise, input_expense(a1, c1)).unwrap();
+    for day in 1..=90u64 {
+        let today = date(2026, 1, 1)
+            .checked_add_days(chrono::Days::new(day))
+            .unwrap();
+        recurring_cmd::expand_due_recurring_for_conn(&stepwise, today, NOW).unwrap();
+    }
+
+    let at_once = fresh();
+    let (a2, _, c2) = seed(&at_once);
+    recurring_cmd::create_rule_for_conn(&at_once, input_expense(a2, c2)).unwrap();
+    recurring_cmd::expand_due_recurring_for_conn(
+        &at_once,
+        date(2026, 1, 1).checked_add_days(chrono::Days::new(90)).unwrap(),
+        NOW,
+    )
+    .unwrap();
+
+    let dates = |conn: &Connection| -> Vec<String> {
+        conn.prepare("SELECT occurred_on FROM transactions ORDER BY occurred_on")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    };
+    assert_eq!(dates(&stepwise), dates(&at_once));
+}
+
+#[test]
+fn an_archived_account_skips_only_that_rule_and_holds_its_watermark() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    let rule =
+        recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+    conn.execute(
+        "UPDATE accounts SET archived_at = ?1 WHERE id = ?2",
+        params![NOW, account_id],
+    )
+    .unwrap();
+
+    let result =
+        recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 4, 1), NOW).unwrap();
+
+    assert_eq!(result.generated, 0);
+    assert_eq!(tx_count(&conn), 0);
+    assert_eq!(result.skipped.len(), 1);
+    assert_eq!(result.skipped[0].rule_id, rule.id);
+    // 見送った期間は次回に持ち越す。
+    let stored = recurring_repo::find_by_id(&conn, rule.id).unwrap();
+    assert_eq!(stored.last_generated_on, None);
+}
+
+#[test]
+fn unarchiving_lets_the_next_expansion_backfill_the_held_period() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+    conn.execute(
+        "UPDATE accounts SET archived_at = ?1 WHERE id = ?2",
+        params![NOW, account_id],
+    )
+    .unwrap();
+    recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 4, 1), NOW).unwrap();
+
+    conn.execute(
+        "UPDATE accounts SET archived_at = NULL WHERE id = ?1",
+        params![account_id],
+    )
+    .unwrap();
+    let result =
+        recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 4, 1), NOW).unwrap();
+
+    assert_eq!(result.generated, 3);
+    assert_eq!(tx_count(&conn), 3);
+}
+
+#[test]
+fn an_archived_category_skips_the_rule() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+    conn.execute(
+        "UPDATE categories SET archived_at = ?1 WHERE id = ?2",
+        params![NOW, category_id],
+    )
+    .unwrap();
+
+    let result =
+        recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 4, 1), NOW).unwrap();
+
+    assert_eq!(result.generated, 0);
+    assert_eq!(result.skipped.len(), 1);
+}
+
+#[test]
+fn an_inactive_rule_is_not_expanded_at_all() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    let rule =
+        recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+    recurring_repo::set_active(&conn, rule.id, false).unwrap();
+
+    let result =
+        recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 4, 1), NOW).unwrap();
+
+    assert_eq!(result.generated, 0);
+    assert!(result.rules.is_empty());
+    // 停止中は「要修正」ではないので警告にも出さない。
+    assert!(result.skipped.is_empty());
+}
+
+#[test]
+fn one_broken_rule_does_not_block_a_healthy_one() {
+    let conn = fresh();
+    let (account_id, counter_account_id, category_id) = seed(&conn);
+    recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+    recurring_cmd::create_rule_for_conn(
+        &conn,
+        RecurringRuleInput {
+            name: "貯金".into(),
+            type_: "transfer".into(),
+            amount: 30_000,
+            account_id,
+            counter_account_id: Some(counter_account_id),
+            category_id: None,
+            description: String::new(),
+            frequency: "monthly".into(),
+            day_of_month: Some(25),
+            day_of_week: None,
+            starts_on: "2026-01-25".into(),
+            ends_on: None,
+        },
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE accounts SET archived_at = ?1 WHERE id = ?2",
+        params![NOW, counter_account_id],
+    )
+    .unwrap();
+
+    let result =
+        recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 4, 1), NOW).unwrap();
+
+    assert_eq!(result.generated, 3);
+    assert_eq!(result.rules.len(), 1);
+    assert_eq!(result.skipped.len(), 1);
+}
+
+#[test]
+fn generated_transfers_stay_out_of_the_income_expense_totals() {
+    let conn = fresh();
+    let (account_id, counter_account_id, _) = seed(&conn);
+    recurring_cmd::create_rule_for_conn(
+        &conn,
+        RecurringRuleInput {
+            name: "貯金".into(),
+            type_: "transfer".into(),
+            amount: 30_000,
+            account_id,
+            counter_account_id: Some(counter_account_id),
+            category_id: None,
+            description: String::new(),
+            frequency: "monthly".into(),
+            day_of_month: Some(25),
+            day_of_week: None,
+            starts_on: "2026-01-25".into(),
+            ends_on: None,
+        },
+    )
+    .unwrap();
+
+    recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 2, 1), NOW).unwrap();
+
+    let counted: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM transactions WHERE type IN ('income','expense')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(counted, 0);
+    assert_eq!(tx_count(&conn), 1);
+}
