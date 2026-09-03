@@ -8,9 +8,13 @@
   let {
     report,
     onYearChange,
+    loading,
+    error,
   }: {
     report: YearlyReport | null;
     onYearChange: (year: number) => void;
+    loading: boolean;
+    error: string | null;
   } = $props();
 
   const chartData = $derived({
@@ -72,7 +76,13 @@
     {#snippet children()}
       <h2>年間サマリー</h2>
       {#if report === null}
-        <EmptyState title="読み込み中" hint="集計を取得しています" />
+        {#if loading}
+          <EmptyState title="読み込み中" hint="集計を取得しています" />
+        {:else if error}
+          <EmptyState title="読み込みに失敗しました" hint={error} />
+        {:else}
+          <EmptyState title="読み込み中" hint="集計を取得しています" />
+        {/if}
       {:else}
         <dl class="summary" data-testid="yearly-summary">
           <div>
