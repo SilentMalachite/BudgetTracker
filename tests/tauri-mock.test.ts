@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { readyBootCommands, readyBootResult } from './e2e/tauriMock';
 import bootStatus from './fixtures/responses/boot_status.ready.json';
+import expandDueRecurring from './fixtures/responses/expand_due_recurring.json';
 import listBalances from './fixtures/responses/list_balances.json';
 import listTransactions from './fixtures/responses/list_transactions.json';
 import monthlySummary from './fixtures/responses/monthly_summary.json';
@@ -16,6 +17,7 @@ const objectResponses: Record<string, Record<string, unknown>> = {
   list_balances: listBalances,
   monthly_summary: monthlySummary,
   list_transactions: listTransactions,
+  expand_due_recurring: expandDueRecurring,
 };
 
 const listResponses = [
@@ -24,6 +26,7 @@ const listResponses = [
   'monthly_series',
   'list_categories',
   'list_accounts',
+  'list_recurring_rules',
 ];
 
 describe('ready boot e2e mock', () => {

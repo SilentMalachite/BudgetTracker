@@ -8,13 +8,16 @@
   import Accounts from './routes/Accounts.svelte';
   import Settings from './routes/Settings.svelte';
   import Recovery from './routes/Recovery.svelte';
+  import Recurring from './routes/Recurring.svelte';
   import { bootStatus, type BootStatus } from './lib/api/boot';
+  import { expandDueRecurring, type ExpansionResult } from './lib/api/recurring';
 
   const routePaths = new Set([
     '/',
     '/transactions',
     '/categories',
     '/budgets',
+    '/recurring',
     '/accounts',
     '/settings',
   ]);
@@ -26,6 +29,7 @@
   let currentPath = $state('/');
   let boot = $state<BootStatus | null>(null);
   let bootError = $state<string | null>(null);
+  let expansion = $state<ExpansionResult | null>(null);
 
   onMount(() => {
     currentPath = normalizePath(window.location.pathname);
@@ -36,6 +40,14 @@
     void bootStatus()
       .then((status) => {
         boot = status;
+        if (status.state !== 'ready') return;
+        return expandDueRecurring()
+          .then((result) => {
+            expansion = result;
+          })
+          .catch(() => {
+            // 展開の失敗でアプリを開けなくしない。Recurring 画面で再試行できる。
+          });
       })
       .catch((e) => {
         bootError = e instanceof Error ? e.message : String(e);
@@ -62,12 +74,31 @@
   <div class="app-shell">
     <Sidebar {currentPath} {navigate} />
     <main class="app-main">
+      {#if expansion && expansion.generated > 0}
+        <div class="banner banner-info" data-testid="recurring-expansion-banner">
+          定期取引を {expansion.generated} 件生成しました
+        </div>
+      {/if}
+      {#if expansion && expansion.skipped.length > 0}
+        <div class="banner banner-warn" data-testid="recurring-skip-banner">
+          {expansion.skipped.length} 件のルールを見送りました。参照先の口座・カテゴリを確認してください
+          <a
+            href="/recurring"
+            onclick={(event) => {
+              event.preventDefault();
+              navigate('/recurring');
+            }}>定期取引を開く</a
+          >
+        </div>
+      {/if}
       {#if currentPath === '/transactions'}
         <Transactions />
       {:else if currentPath === '/categories'}
         <Categories />
       {:else if currentPath === '/budgets'}
         <Budgets />
+      {:else if currentPath === '/recurring'}
+        <Recurring />
       {:else if currentPath === '/accounts'}
         <Accounts />
       {:else if currentPath === '/settings'}
@@ -83,5 +114,23 @@
   .boot-message {
     color: white;
     padding: var(--space-6);
+  }
+
+  .banner {
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-4);
+  }
+
+  .banner-info {
+    background: rgba(79, 172, 254, 0.18);
+  }
+
+  .banner-warn {
+    background: rgba(255, 170, 0, 0.22);
+  }
+
+  .banner a {
+    margin-left: var(--space-3);
   }
 </style>

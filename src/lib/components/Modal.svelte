@@ -97,11 +97,15 @@
     box-shadow: var(--shadow-lg);
     min-width: 360px;
     max-width: min(560px, calc(100vw - var(--space-6)));
+    max-height: calc(100vh - var(--space-6));
+    display: flex;
+    flex-direction: column;
   }
 
   header {
     padding: var(--space-5);
     border-bottom: 1px solid var(--border);
+    flex: none;
   }
 
   h2 {
@@ -113,6 +117,9 @@
     padding: var(--space-5);
     display: grid;
     gap: var(--space-4);
+    overflow-y: auto;
+    flex: 1 1 auto;
+    min-height: 0;
   }
 
   footer {
@@ -121,5 +128,6 @@
     display: flex;
     justify-content: flex-end;
     gap: var(--space-3);
+    flex: none;
   }
 </style>
