@@ -41,6 +41,73 @@ pub struct RecurringRuleView {
     pub next_occurrence: Option<String>,
 }
 
+/// 「今日より後」の予定を何件見せるか。
+const UPCOMING_COUNT: usize = 3;
+
+/// 保存前に見せる発生日の内訳。
+#[derive(Debug, Clone, Serialize)]
+pub struct OccurrencePreview {
+    /// 保存した瞬間に生成される分 (starts_on から today まで)。`limit` で切られる。
+    pub backfill: Vec<String>,
+    /// `limit` で切る前の backfill 総数。
+    pub backfill_total: i64,
+    /// backfill が `limit` で切られたか。
+    pub truncated: bool,
+    /// today より後の予定 (最大 3 件)。生成はされない。
+    pub upcoming: Vec<String>,
+}
+
+fn iso(date: NaiveDate) -> String {
+    date.format("%Y-%m-%d").to_string()
+}
+
+/// 入力の形だけを見て発生日を数える。DB は触らない。
+pub fn preview_for_input(
+    input: &RecurringRuleInput,
+    today: NaiveDate,
+    limit: usize,
+) -> AppResult<OccurrencePreview> {
+    let schedule = validate(input)?.schedule();
+
+    let backfill_dates = recurring::occurrences_between(&schedule, None, today);
+    let backfill_total = backfill_dates.len() as i64;
+    let truncated = backfill_dates.len() > limit;
+    let backfill = backfill_dates.iter().take(limit).copied().map(iso).collect();
+
+    let mut upcoming = Vec::new();
+    let mut cursor = today;
+    for _ in 0..UPCOMING_COUNT {
+        match recurring::next_occurrence(&schedule, cursor) {
+            Some(date) => {
+                upcoming.push(iso(date));
+                cursor = date;
+            }
+            None => break,
+        }
+    }
+
+    Ok(OccurrencePreview {
+        backfill,
+        backfill_total,
+        truncated,
+        upcoming,
+    })
+}
+
+#[tauri::command]
+pub fn preview_recurring_occurrences(
+    input: RecurringRuleInput,
+    limit: u32,
+) -> AppResult<OccurrencePreview> {
+    if !(1..=500).contains(&limit) {
+        return Err(crate::error::AppError::InvalidArgument(format!(
+            "limit must be 1..=500, got {limit}"
+        )));
+    }
+    let today = chrono::Local::now().date_naive();
+    preview_for_input(&input, today, limit as usize)
+}
+
 fn validate(input: &RecurringRuleInput) -> AppResult<ValidatedRule> {
     recurring::validate_rule_input(&RawRuleInput {
         name: &input.name,

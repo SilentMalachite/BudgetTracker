@@ -69,6 +69,7 @@ pub fn run() {
             commands::recurring::create_recurring_rule,
             commands::recurring::update_recurring_rule,
             commands::recurring::set_recurring_rule_active,
+            commands::recurring::preview_recurring_occurrences,
             commands::backup::export_json,
             commands::backup::import_json,
             commands::settings::get_last_backup_at,
