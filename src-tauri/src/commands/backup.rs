@@ -369,22 +369,34 @@ fn insert_category(
 /// succeed and leave two identical schedules behind — and every later expansion
 /// would then write each occurrence twice, for good.
 ///
-/// The account is matched through the account *row* (name / kind / currency)
-/// rather than through `account_id`. Append inserts accounts unconditionally,
-/// so importing a backup into the database it came from creates a second
-/// account row and the incoming rule points at that copy; comparing raw ids
-/// would never match. Everything else is compared exactly as the insert writes
-/// it, including the same fallbacks.
+/// Both accounts are matched through the account *row* (name / kind / currency)
+/// rather than through their ids. Append inserts accounts unconditionally, so
+/// importing a backup into the database it came from creates a second account
+/// row and the incoming rule points at that copy; comparing raw ids would never
+/// match. The category, in contrast, *is* compared by id: categories dedupe on
+/// `UNIQUE(name, type)`, so a merge has already resolved an incoming category to
+/// the existing row's id.
+///
+/// Every reference is part of the key, and every nullable one is compared
+/// NULL-safely with `IS`. Leaving the category or the transfer destination out
+/// would make two genuinely different rules collide on a cross-database merge —
+/// the same subscription under a different category, or the same transfer to a
+/// different bank — and silently drop the incoming one. Everything else is
+/// compared exactly as the insert writes it, including the same fallbacks.
 fn existing_recurring_rule_id(
     tx: &rusqlite::Transaction<'_>,
     rule: &serde_json::Value,
     account_id: i64,
+    counter_account_id: Option<i64>,
+    category_id: Option<i64>,
 ) -> AppResult<Option<i64>> {
     tx.query_row(
         "SELECT r.id
            FROM recurring_rules r
            JOIN accounts a ON a.id = r.account_id
            JOIN accounts incoming ON incoming.id = ?1
+           LEFT JOIN accounts ca ON ca.id = r.counter_account_id
+           LEFT JOIN accounts incoming_counter ON incoming_counter.id = ?9
           WHERE r.name = ?2
             AND r.type = ?3
             AND r.amount = ?4
@@ -395,6 +407,11 @@ fn existing_recurring_rule_id(
             AND a.name = incoming.name
             AND a.kind = incoming.kind
             AND a.currency = incoming.currency
+            AND ((r.counter_account_id IS NULL AND ?9 IS NULL)
+                 OR (ca.name = incoming_counter.name
+                     AND ca.kind = incoming_counter.kind
+                     AND ca.currency = incoming_counter.currency))
+            AND r.category_id IS ?10
           LIMIT 1",
         params![
             account_id,
@@ -405,6 +422,8 @@ fn existing_recurring_rule_id(
             value_i64(rule, "day_of_month"),
             value_i64(rule, "day_of_week"),
             value_str(rule, "starts_on").unwrap_or("1970-01-01"),
+            counter_account_id,
+            category_id,
         ],
         |row| row.get(0),
     )
@@ -483,7 +502,9 @@ fn insert_recurring_rule(
             true,
         )))
     } else {
-        if let Some(existing_id) = existing_recurring_rule_id(tx, rule, account_id)? {
+        if let Some(existing_id) =
+            existing_recurring_rule_id(tx, rule, account_id, counter_account_id, category_id)?
+        {
             warnings.push(format!(
                 "skipped duplicate recurring rule: {}",
                 value_str(rule, "name").unwrap_or("")
