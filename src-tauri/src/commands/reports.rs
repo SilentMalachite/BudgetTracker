@@ -184,7 +184,11 @@ pub fn report_yearly(state: State<'_, AppState>, year: i32) -> AppResult<YearlyR
 pub struct CategoryReport {
     /// 軸ラベル。`series[*].points` はこの並びと同じ長さ。
     pub months: Vec<String>,
+    /// 金額の降順、同額なら category id の昇順
+    /// （`report_repo::category_totals_between` の並びをフィルタで素通しするだけなので保たれる）。
+    /// UI はこの並びの先頭 N 件を「上位カテゴリ」として扱ってよい。
     pub income: Vec<CategoryAggregate>,
+    /// 金額の降順、同額なら category id の昇順。`income` と同じ保証。
     pub expense: Vec<CategoryAggregate>,
     pub series: Vec<CategorySeries>,
 }

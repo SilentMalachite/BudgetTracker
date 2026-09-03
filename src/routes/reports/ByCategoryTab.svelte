@@ -5,7 +5,15 @@
   import { formatCurrency } from '../../lib/utils/formatCurrency';
   import type { CategoryReport } from '../../lib/api/reports';
 
-  let { report }: { report: CategoryReport | null } = $props();
+  let {
+    report,
+    loading,
+    error,
+  }: {
+    report: CategoryReport | null;
+    loading: boolean;
+    error: string | null;
+  } = $props();
 
   const PALETTE = ['#667eea', '#764ba2', '#4facfe', '#00f2fe', '#f6ad55', '#e53e3e', '#38b2ac'];
   const TREND_LIMIT = 5;
@@ -14,6 +22,28 @@
 
   const expense = $derived(report?.expense ?? []);
   const income = $derived(report?.income ?? []);
+
+  /**
+   * category_id → 色。表示順（expense → income、それぞれ金額降順）で一度だけ割り当てる。
+   * 円グラフ・凡例・推移グラフが別々の配列を別々の順序で描くので、色は配列内の位置ではなく
+   * category_id で引く。位置ベースだと、同じカテゴリが円グラフでは色 A、推移グラフでは
+   * フィルタ後の位置がずれて色 B になり得る。
+   */
+  const categoryColor = $derived.by(() => {
+    const map = new Map<number, string>();
+    let next = 0;
+    for (const aggregate of [...expense, ...income]) {
+      if (!map.has(aggregate.category_id)) {
+        map.set(aggregate.category_id, PALETTE[next % PALETTE.length]);
+        next += 1;
+      }
+    }
+    return map;
+  });
+
+  function colorFor(categoryId: number): string {
+    return categoryColor.get(categoryId) ?? PALETTE[0];
+  }
 
   /** 初期は支出上位5本。1つ選ぶとその1本だけ。Rust が降順で返すので先頭を取るだけ。 */
   const visibleSeries = $derived.by(() => {
@@ -41,7 +71,7 @@
       datasets: [
         {
           data: aggregates.map((a) => a.amount),
-          backgroundColor: aggregates.map((_, i) => PALETTE[i % PALETTE.length]),
+          backgroundColor: aggregates.map((a) => colorFor(a.category_id)),
         },
       ],
     };
@@ -65,11 +95,11 @@
 
   const trendData = $derived({
     labels: report?.months ?? [],
-    datasets: visibleSeries.map((series, i) => ({
+    datasets: visibleSeries.map((series) => ({
       label: series.name,
       data: series.points,
-      borderColor: PALETTE[i % PALETTE.length],
-      backgroundColor: PALETTE[i % PALETTE.length],
+      borderColor: colorFor(series.category_id),
+      backgroundColor: colorFor(series.category_id),
       tension: 0.25,
     })),
   });
@@ -85,7 +115,15 @@
   <Card>
     {#snippet children()}
       <h2>支出の内訳</h2>
-      {#if expense.length === 0}
+      {#if report === null}
+        {#if loading}
+          <EmptyState title="読み込み中" hint="集計を取得しています" />
+        {:else if error}
+          <EmptyState title="読み込みに失敗しました" hint={error} />
+        {:else}
+          <EmptyState title="読み込み中" hint="集計を取得しています" />
+        {/if}
+      {:else if expense.length === 0}
         <EmptyState title="支出がありません" hint="期間を広げるか取引を記録してください" />
       {:else}
         <div class="pie-box">
@@ -98,7 +136,7 @@
           />
         </div>
         <ul class="legend" data-testid="legend-expense">
-          {#each expense as aggregate, i (aggregate.category_id)}
+          {#each expense as aggregate (aggregate.category_id)}
             <li>
               <button
                 type="button"
@@ -106,7 +144,7 @@
                 data-testid={`legend-category-${aggregate.category_id}`}
                 onclick={() => toggle(aggregate.category_id)}
               >
-                <span class="swatch" style={`background: ${PALETTE[i % PALETTE.length]}`}></span>
+                <span class="swatch" style={`background: ${colorFor(aggregate.category_id)}`}></span>
                 <span class="legend-name">{aggregate.name}</span>
                 <span class="legend-amount">{formatCurrency(aggregate.amount)}</span>
               </button>
@@ -120,7 +158,15 @@
   <Card>
     {#snippet children()}
       <h2>収入の内訳</h2>
-      {#if income.length === 0}
+      {#if report === null}
+        {#if loading}
+          <EmptyState title="読み込み中" hint="集計を取得しています" />
+        {:else if error}
+          <EmptyState title="読み込みに失敗しました" hint={error} />
+        {:else}
+          <EmptyState title="読み込み中" hint="集計を取得しています" />
+        {/if}
+      {:else if income.length === 0}
         <EmptyState title="収入がありません" hint="期間を広げるか取引を記録してください" />
       {:else}
         <div class="pie-box">
@@ -133,7 +179,7 @@
           />
         </div>
         <ul class="legend" data-testid="legend-income">
-          {#each income as aggregate, i (aggregate.category_id)}
+          {#each income as aggregate (aggregate.category_id)}
             <li>
               <button
                 type="button"
@@ -141,7 +187,7 @@
                 data-testid={`legend-category-${aggregate.category_id}`}
                 onclick={() => toggle(aggregate.category_id)}
               >
-                <span class="swatch" style={`background: ${PALETTE[i % PALETTE.length]}`}></span>
+                <span class="swatch" style={`background: ${colorFor(aggregate.category_id)}`}></span>
                 <span class="legend-name">{aggregate.name}</span>
                 <span class="legend-amount">{formatCurrency(aggregate.amount)}</span>
               </button>

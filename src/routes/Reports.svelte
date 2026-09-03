@@ -1,10 +1,12 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
+  import type { UnlistenFn } from '@tauri-apps/api/event';
   import ByCategoryTab from './reports/ByCategoryTab.svelte';
   import MonthlyTab from './reports/MonthlyTab.svelte';
   import TrendTab from './reports/TrendTab.svelte';
   import YearlyTab from './reports/YearlyTab.svelte';
   import { monthlySeries, type MonthlyBucket } from '../lib/api/reports';
+  import { onDataChanged } from '../lib/api/events';
   import { createReportsStore } from '../lib/stores/reports.svelte';
   import type { RangePreset } from '../lib/utils/yearMonth';
 
@@ -26,22 +28,52 @@
 
   const store = createReportsStore();
 
-  // 月次タブの棒グラフは既存コマンドを使う（系列を二重に持たない）。
+  // 月次タブの棒グラフは既存コマンドを使う（系列を二重に持たない）。ストアの4本と
+  // 同じ data:changed 信号で再取得し、同じ「古い応答は無視する」ガードをかける。
+  // そうしないと、画面を開いたまま他画面で取引を編集したときこのグラフだけ古くなる。
   let series = $state<MonthlyBucket[]>([]);
   let seriesError = $state<string | null>(null);
+  let seriesUnlisten: UnlistenFn | null = null;
+  let seriesDisposed = false;
+  let seriesRequestId = 0;
+
+  async function loadSeries() {
+    const id = ++seriesRequestId;
+    try {
+      const next = await monthlySeries(12);
+      if (seriesDisposed || id !== seriesRequestId) return;
+      series = next;
+      seriesError = null;
+    } catch (e) {
+      if (seriesDisposed || id !== seriesRequestId) return;
+      seriesError = e instanceof Error ? e.message : String(e);
+    }
+  }
 
   onMount(() => {
     void store.load();
-    void monthlySeries(12)
-      .then((next) => {
-        series = next;
-      })
-      .catch((e) => {
-        seriesError = e instanceof Error ? e.message : String(e);
-      });
+    void loadSeries();
+    void (async () => {
+      try {
+        const nextUnlisten = await onDataChanged((domain) => {
+          if (domain === 'transactions' || domain === 'categories' || domain === 'accounts') {
+            void loadSeries();
+          }
+        });
+        if (seriesDisposed) nextUnlisten();
+        else seriesUnlisten = nextUnlisten;
+      } catch {
+        // Browser-only E2E has no Tauri event bus; the explicit loadSeries() above already ran.
+      }
+    })();
   });
 
   onDestroy(() => {
+    seriesDisposed = true;
+    if (seriesUnlisten) {
+      seriesUnlisten();
+      seriesUnlisten = null;
+    }
     void store.dispose();
   });
 
@@ -91,13 +123,25 @@
   </div>
 
   {#if tab === 'monthly'}
-    <MonthlyTab report={store.monthly} {series} year={new Date().getFullYear()} month={store.month} />
+    <MonthlyTab
+      report={store.monthly}
+      {series}
+      year={new Date().getFullYear()}
+      month={store.month}
+      loading={store.loading}
+      error={store.error}
+    />
   {:else if tab === 'yearly'}
-    <YearlyTab report={store.yearly} onYearChange={(year) => void store.setYear(year)} />
+    <YearlyTab
+      report={store.yearly}
+      onYearChange={(year) => void store.setYear(year)}
+      loading={store.loading}
+      error={store.error}
+    />
   {:else if tab === 'category'}
-    <ByCategoryTab report={store.byCategory} />
+    <ByCategoryTab report={store.byCategory} loading={store.loading} error={store.error} />
   {:else}
-    <TrendTab report={store.netWorth} />
+    <TrendTab report={store.netWorth} loading={store.loading} error={store.error} />
   {/if}
 </section>
 

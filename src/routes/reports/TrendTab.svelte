@@ -4,7 +4,15 @@
   import EmptyState from '../../lib/components/EmptyState.svelte';
   import type { NetWorthReport } from '../../lib/api/reports';
 
-  let { report }: { report: NetWorthReport | null } = $props();
+  let {
+    report,
+    loading,
+    error,
+  }: {
+    report: NetWorthReport | null;
+    loading: boolean;
+    error: string | null;
+  } = $props();
 
   const points = $derived(report?.points ?? []);
   const labels = $derived(points.map((point) => point.year_month));
@@ -56,7 +64,15 @@
   <Card>
     {#snippet children()}
       <h2>純資産推移</h2>
-      {#if points.length === 0}
+      {#if report === null}
+        {#if loading}
+          <EmptyState title="読み込み中" hint="集計を取得しています" />
+        {:else if error}
+          <EmptyState title="読み込みに失敗しました" hint={error} />
+        {:else}
+          <EmptyState title="読み込み中" hint="集計を取得しています" />
+        {/if}
+      {:else if points.length === 0}
         <EmptyState title="データがありません" hint="口座と取引を登録すると表示されます" />
       {:else}
         <div class="chart-box">
@@ -76,7 +92,15 @@
   <Card>
     {#snippet children()}
       <h2>月次収支と3ヶ月移動平均</h2>
-      {#if points.length === 0}
+      {#if report === null}
+        {#if loading}
+          <EmptyState title="読み込み中" hint="集計を取得しています" />
+        {:else if error}
+          <EmptyState title="読み込みに失敗しました" hint={error} />
+        {:else}
+          <EmptyState title="読み込み中" hint="集計を取得しています" />
+        {/if}
+      {:else if points.length === 0}
         <EmptyState title="データがありません" hint="取引ページから記録できます" />
       {:else}
         <div class="chart-box">

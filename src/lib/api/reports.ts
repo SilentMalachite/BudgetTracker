@@ -81,7 +81,13 @@ export type CategorySeries = {
 
 export type CategoryReport = {
   months: string[];
+  /**
+   * 金額の降順、同額なら category_id の昇順（Rust の `category_totals_between` の
+   * SQL `ORDER BY` をそのまま素通しする）。上位 N 件を出したいだけなら先頭から
+   * slice すればよく、呼び直しは不要。
+   */
   income: CategoryAggregate[];
+  /** `income` と同じ順序保証。 */
   expense: CategoryAggregate[];
   series: CategorySeries[];
 };

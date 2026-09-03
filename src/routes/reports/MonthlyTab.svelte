@@ -10,11 +10,15 @@
     series,
     year,
     month,
+    loading,
+    error,
   }: {
     report: MonthlyReport | null;
     series: MonthlyBucket[];
     year: number;
     month: number;
+    loading: boolean;
+    error: string | null;
   } = $props();
 
   const chartData = $derived({
@@ -57,7 +61,13 @@
     {#snippet children()}
       <h2>{year}年{month}月の比較</h2>
       {#if report === null}
-        <EmptyState title="読み込み中" hint="集計を取得しています" />
+        {#if loading}
+          <EmptyState title="読み込み中" hint="集計を取得しています" />
+        {:else if error}
+          <EmptyState title="読み込みに失敗しました" hint={error} />
+        {:else}
+          <EmptyState title="読み込み中" hint="集計を取得しています" />
+        {/if}
       {:else}
         <dl class="compare" data-testid="monthly-compare">
           <div>
