@@ -53,6 +53,10 @@ pub struct OccurrencePreview {
     pub backfill: Vec<String>,
     /// `limit` で切る前の backfill 総数。
     pub backfill_total: i64,
+    /// backfill 全体の最後の発生日。`limit` で切っても縮まない。backfill が
+    /// 0 件なら `None`。`backfill` の末尾は切られていれば「`limit` 件目」でしか
+    /// なく、生成がどこまで届くかを名乗れるのはこちらだけ。
+    pub backfill_last: Option<String>,
     /// backfill が `limit` で切られたか。
     pub truncated: bool,
     /// today より後の予定 (最大 3 件)。生成はされない。
@@ -80,6 +84,7 @@ pub fn preview_for_input(
 
     let backfill_dates = recurring::occurrences_between(&schedule, after, today);
     let backfill_total = backfill_dates.len() as i64;
+    let backfill_last = backfill_dates.last().copied().map(iso);
     let truncated = backfill_dates.len() > limit;
     let backfill = backfill_dates.iter().take(limit).copied().map(iso).collect();
 
@@ -98,6 +103,7 @@ pub fn preview_for_input(
     Ok(OccurrencePreview {
         backfill,
         backfill_total,
+        backfill_last,
         truncated,
         upcoming,
     })

@@ -54,6 +54,11 @@ export type RecurringRuleInput = {
 export type OccurrencePreview = {
   backfill: string[];
   backfill_total: number;
+  /**
+   * backfill 全体の最後の発生日。`backfill` は limit で切られるので、その末尾は
+   * 「limit 件目」でしかない。生成がどこまで届くかを名乗れるのはこちらだけ。
+   */
+  backfill_last: string | null;
   truncated: boolean;
   upcoming: string[];
 };

@@ -119,9 +119,22 @@ describe('Recurring', () => {
   const previewOf = (total: number) => ({
     backfill: [],
     backfill_total: total,
+    backfill_last: total > 0 ? '2026-04-27' : null,
     truncated: false,
     upcoming: ['2026-02-27'],
   });
+
+  /** 数え直しを開いたままにする。解決する関数を返す。 */
+  function holdTheRecount() {
+    let release!: (value: unknown) => void;
+    previewRecurringOccurrencesMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    return (value: unknown) => release(value);
+  }
 
   it('drops a fetched preview as soon as a schedule field changes', async () => {
     previewRecurringOccurrencesMock.mockResolvedValue(previewOf(4));
@@ -168,6 +181,72 @@ describe('Recurring', () => {
       expect(createRecurringRuleMock).toHaveBeenCalledTimes(1);
     });
     expect(screen.queryByTestId('recurring-backfill-confirm')).toBeNull();
+  });
+
+  it('never writes an input that was not the one counted and confirmed', async () => {
+    previewRecurringOccurrencesMock.mockResolvedValue(previewOf(4));
+    await openNewRuleForm();
+
+    // 2026-01-27 の 4 件を承諾する。
+    await fireEvent.click(screen.getByTestId('recurring-save'));
+    await screen.findByTestId('recurring-backfill-confirm');
+
+    // 承諾後の数え直しを IPC 往復の途中で止め、その隙にフォームを 10 年戻す。
+    const release = holdTheRecount();
+    void fireEvent.click(screen.getByTestId('recurring-backfill-confirm-button'));
+    await fireEvent.input(screen.getByTestId('recurring-starts-on'), {
+      target: { value: '2016-01-01' },
+    });
+    release(previewOf(4));
+    await waitFor(() => {
+      expect(previewRecurringOccurrencesMock).toHaveBeenCalledTimes(2);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // 承諾したのは 2026-01-27 の 4 件。2016-01-01 のルールは書かせない。
+    expect(createRecurringRuleMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ starts_on: '2016-01-01' }),
+    );
+    expect(createRecurringRuleMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId('page-error')).toBeTruthy();
+  });
+
+  it('says so instead of doing nothing when the form moves during the count', async () => {
+    previewRecurringOccurrencesMock.mockResolvedValue(previewOf(4));
+    await openNewRuleForm();
+
+    const release = holdTheRecount();
+    void fireEvent.click(screen.getByTestId('recurring-save'));
+    await fireEvent.input(screen.getByTestId('recurring-starts-on'), {
+      target: { value: '2016-01-01' },
+    });
+    release(previewOf(4));
+
+    // 古い鍵で確認待ちにすると確認ブロックは出ず、押しても何も起きない画面になる。
+    await waitFor(() => {
+      expect(screen.getByTestId('page-error')).toBeTruthy();
+    });
+    expect(screen.queryByTestId('recurring-backfill-confirm')).toBeNull();
+    expect(createRecurringRuleMock).not.toHaveBeenCalled();
+  });
+
+  it('does not name a last date it cannot know when the list is truncated', async () => {
+    previewRecurringOccurrencesMock.mockResolvedValue({
+      // limit で切られた一覧。末尾は 100 件目であって最後の発生日ではない。
+      backfill: ['2016-01-01', '2024-04-01'],
+      backfill_total: 129,
+      backfill_last: '2026-09-01',
+      truncated: true,
+      upcoming: ['2026-10-01'],
+    });
+    await openNewRuleForm();
+
+    await fireEvent.click(screen.getByTestId('recurring-save'));
+
+    const confirmBlock = await screen.findByTestId('recurring-backfill-confirm');
+    expect(confirmBlock.textContent).toContain('129 件');
+    expect(confirmBlock.textContent).toContain('2026-09-01');
+    expect(confirmBlock.textContent).not.toContain('2024-04-01');
   });
 
   it('counts an edited rule from its stored watermark, not from starts_on', async () => {

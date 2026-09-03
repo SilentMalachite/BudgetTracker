@@ -81,6 +81,7 @@ test('a backfilling save waits for an explicit confirmation', async ({ page }) =
             return {
               backfill: ['2026-01-27', '2026-02-27', '2026-03-27', '2026-04-27'],
               backfill_total: 4,
+              backfill_last: '2026-04-27',
               truncated: false,
               upcoming: ['2026-05-27'],
             };
@@ -161,9 +162,16 @@ test('a rule with no backfill saves in one step', async ({ page }) => {
             return state.created > 0
               ? [{ rule: fixtures.rule, next_occurrence: '2026-02-27' }]
               : [];
-          // 今日から始まるルールなので、生成される過去分はゼロ。
+          // 今日より後にしか発生しないルールなので、生成される過去分はゼロ。
+          // (今日が発生日なら 1 件生成されるので確認が出る。判定は開始日ではなく件数。)
           case 'preview_recurring_occurrences':
-            return { backfill: [], backfill_total: 0, truncated: false, upcoming: ['2026-02-27'] };
+            return {
+              backfill: [],
+              backfill_total: 0,
+              backfill_last: null,
+              truncated: false,
+              upcoming: ['2026-02-27'],
+            };
           case 'create_recurring_rule':
             state.created += 1;
             (window as any).__created = state.created;
@@ -223,6 +231,7 @@ test('a skipped rule is flagged in the banner and on its own row', async ({ page
             return {
               backfill: ['2026-04-27'],
               backfill_total: 1,
+              backfill_last: '2026-04-27',
               truncated: false,
               upcoming: ['2026-05-27'],
             };

@@ -556,6 +556,7 @@ fn preview_recurring_occurrences() {
         &OccurrencePreview {
             backfill: vec!["2026-01-27".into(), "2026-02-27".into()],
             backfill_total: 2,
+            backfill_last: Some("2026-02-27".into()),
             truncated: false,
             upcoming: vec![
                 "2026-03-27".into(),
