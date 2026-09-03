@@ -546,6 +546,135 @@ fn expanding_day_by_day_matches_one_big_catch_up() {
     assert_eq!(dates(&stepwise), dates(&at_once));
 }
 
+/// 唯一 monthly でしか展開を確かめていなかった穴を塞ぐ。weekly は
+/// `classify_skip` の周期/日付列ペアリングと `occurrences_between` の weekly
+/// 分岐の両方を通るので、実コマンド経由で厳密な日付まで固定する。
+///
+/// `starts_on` を木曜 (2026-01-01) にしつつ `day_of_week` は月曜 (1) を指定する。
+/// 曜日をわざとずらすことで、`occurrences_between` が `day_of_week` を無視して
+/// `starts_on` の曜日にフォールバックする実装に戻っても、この生成日で必ず落ちる。
+#[test]
+fn expansion_generates_every_weekly_occurrence_on_the_chosen_weekday() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    let weekly = RecurringRuleInput {
+        frequency: "weekly".into(),
+        day_of_month: None,
+        day_of_week: Some(1), // 月曜 (chrono: 0=日曜..6=土曜)
+        starts_on: "2026-01-01".into(), // 木曜。day_of_week とわざと不一致にする。
+        ..input_expense(account_id, category_id)
+    };
+    recurring_cmd::create_rule_for_conn(&conn, weekly).unwrap();
+
+    let result =
+        recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 3, 10), NOW).unwrap();
+
+    assert_eq!(result.generated, 10);
+    assert_eq!(result.rules.len(), 1);
+    assert!(result.skipped.is_empty());
+    let dates: Vec<String> = conn
+        .prepare("SELECT occurred_on FROM transactions ORDER BY occurred_on")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert_eq!(
+        dates,
+        vec![
+            "2026-01-05",
+            "2026-01-12",
+            "2026-01-19",
+            "2026-01-26",
+            "2026-02-02",
+            "2026-02-09",
+            "2026-02-16",
+            "2026-02-23",
+            "2026-03-02",
+            "2026-03-09",
+        ]
+    );
+}
+
+/// yearly も同じ穴。`occurrences_between` の yearly 分岐は月を `starts_on` から、
+/// 日を `day_of_month` から取るので、年をまたいで同じ月日にだけ発生することを固定する。
+#[test]
+fn expansion_generates_every_yearly_occurrence_on_the_chosen_month_and_day() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    let yearly = RecurringRuleInput {
+        frequency: "yearly".into(),
+        day_of_month: Some(15),
+        day_of_week: None,
+        starts_on: "2024-06-15".into(),
+        ..input_expense(account_id, category_id)
+    };
+    recurring_cmd::create_rule_for_conn(&conn, yearly).unwrap();
+
+    // today = 2027-01-01。2027-06-15 はまだ来ていないので 3 件 (2024〜2026)。
+    let result =
+        recurring_cmd::expand_due_recurring_for_conn(&conn, date(2027, 1, 1), NOW).unwrap();
+
+    assert_eq!(result.generated, 3);
+    assert_eq!(result.rules.len(), 1);
+    assert!(result.skipped.is_empty());
+    let dates: Vec<String> = conn
+        .prepare("SELECT occurred_on FROM transactions ORDER BY occurred_on")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert_eq!(dates, vec!["2024-06-15", "2025-06-15", "2026-06-15"]);
+}
+
+/// 2 口座が異なる正常な振替ルールも、既存テストは件数と type しか見ていなかった。
+/// `classify_skip` の transfer 分岐 (counter_account_id 必須・別口座・category_id
+/// なし) を実コマンド経由で通し、生成日まで固定する。
+#[test]
+fn expansion_generates_a_valid_transfer_rules_occurrences() {
+    let conn = fresh();
+    let (account_id, counter_account_id, _) = seed(&conn);
+    recurring_cmd::create_rule_for_conn(
+        &conn,
+        RecurringRuleInput {
+            name: "貯金".into(),
+            type_: "transfer".into(),
+            amount: 30_000,
+            account_id,
+            counter_account_id: Some(counter_account_id),
+            category_id: None,
+            description: String::new(),
+            frequency: "monthly".into(),
+            day_of_month: Some(25),
+            day_of_week: None,
+            starts_on: "2026-01-25".into(),
+            ends_on: None,
+        },
+    )
+    .unwrap();
+
+    let result =
+        recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 4, 1), NOW).unwrap();
+
+    assert_eq!(result.generated, 3);
+    assert_eq!(result.rules.len(), 1);
+    assert!(result.skipped.is_empty());
+    let dates: Vec<String> = conn
+        .prepare("SELECT occurred_on FROM transactions ORDER BY occurred_on")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert_eq!(dates, vec!["2026-01-25", "2026-02-25", "2026-03-25"]);
+
+    let type_: String = conn
+        .query_row("SELECT type FROM transactions LIMIT 1", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(type_, "transfer");
+}
+
 #[test]
 fn an_archived_account_skips_only_that_rule_and_holds_its_watermark() {
     let conn = fresh();
