@@ -246,7 +246,7 @@ pub fn build_net_worth_report(
     let nets: Vec<i64> = report::align_to_months(
         &buckets
             .iter()
-            .map(|b| (b.year_month.clone(), b.income.saturating_sub(b.expense)))
+            .map(|b| (b.year_month.clone(), PeriodTotals::new(b.income, b.expense).net))
             .collect::<Vec<_>>(),
         &months,
     );
