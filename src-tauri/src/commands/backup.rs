@@ -994,17 +994,21 @@ fn validate_recurring_rule_row(
         }
     }
     let _ = required_i64(row, "account_id", index, ENTITY, errors);
-    if let Some(frequency) = required_str(row, "frequency", index, ENTITY, errors) {
-        if !matches!(frequency, "monthly" | "weekly" | "yearly") {
+    let mut frequency = None;
+    if let Some(raw) = required_str(row, "frequency", index, ENTITY, errors) {
+        if matches!(raw, "monthly" | "weekly" | "yearly") {
+            frequency = Some(raw);
+        } else {
             push_error(
                 errors,
                 index,
                 ENTITY,
-                format!("frequency must be monthly|weekly|yearly, got '{frequency}'"),
+                format!("frequency must be monthly|weekly|yearly, got '{raw}'"),
             );
         }
     }
-    if let Some(day) = value_i64(row, "day_of_month") {
+    let day_of_month = value_i64(row, "day_of_month");
+    if let Some(day) = day_of_month {
         if !(1..=31).contains(&day) {
             push_error(
                 errors,
@@ -1014,7 +1018,8 @@ fn validate_recurring_rule_row(
             );
         }
     }
-    if let Some(day) = value_i64(row, "day_of_week") {
+    let day_of_week = value_i64(row, "day_of_week");
+    if let Some(day) = day_of_week {
         if !(0..=6).contains(&day) {
             push_error(
                 errors,
@@ -1023,6 +1028,44 @@ fn validate_recurring_rule_row(
                 format!("day_of_week must be 0..=6, got {day}"),
             );
         }
+    }
+    // 周期と日付列の組み合わせ。`recurring_rules` にはこの CHECK が無く、
+    // `domain::recurring::validate_rule_input` は UI 経由の入力しか通らない。
+    // ここを抜けた行は展開時に `occurrences_between` が `starts_on` から曜日や
+    // 日を推測してしまい、ユーザーが選んでいない日に取引が生成される。
+    match frequency {
+        Some("weekly") => {
+            if day_of_week.is_none() {
+                push_error(errors, index, ENTITY, "weekly rules require a day_of_week");
+            }
+            if day_of_month.is_some() {
+                push_error(
+                    errors,
+                    index,
+                    ENTITY,
+                    "weekly rules must not carry a day_of_month",
+                );
+            }
+        }
+        Some(other) => {
+            if day_of_month.is_none() {
+                push_error(
+                    errors,
+                    index,
+                    ENTITY,
+                    format!("{other} rules require a day_of_month"),
+                );
+            }
+            if day_of_week.is_some() {
+                push_error(
+                    errors,
+                    index,
+                    ENTITY,
+                    format!("{other} rules must not carry a day_of_week"),
+                );
+            }
+        }
+        None => {}
     }
     if let Some(active) = value_i64(row, "active") {
         if !matches!(active, 0 | 1) {
