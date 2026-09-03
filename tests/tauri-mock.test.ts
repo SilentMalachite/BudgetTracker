@@ -6,6 +6,8 @@ import expandDueRecurring from './fixtures/responses/expand_due_recurring.json';
 import listBalances from './fixtures/responses/list_balances.json';
 import listTransactions from './fixtures/responses/list_transactions.json';
 import monthlySummary from './fixtures/responses/monthly_summary.json';
+import reportMonthly from './fixtures/responses/report_monthly.json';
+import reportYearly from './fixtures/responses/report_yearly.json';
 
 /**
  * The ready-boot mock answers every command with its empty state. Object
@@ -18,6 +20,8 @@ const objectResponses: Record<string, Record<string, unknown>> = {
   monthly_summary: monthlySummary,
   list_transactions: listTransactions,
   expand_due_recurring: expandDueRecurring,
+  report_monthly: reportMonthly,
+  report_yearly: reportYearly,
 };
 
 const listResponses = [

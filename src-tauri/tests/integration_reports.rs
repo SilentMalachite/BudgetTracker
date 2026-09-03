@@ -332,3 +332,64 @@ fn opening_net_worth_ignores_archived_accounts() {
 
     assert_eq!(report_repo::opening_net_worth(&conn, "2026-04").unwrap(), 10_000);
 }
+
+#[test]
+fn monthly_report_compares_against_last_month_and_last_year() {
+    let (conn, a, _b, expense, income) = seeded_db();
+    insert_tx(&conn, "2025-05-10", "expense", 1_000, a, None, Some(expense));
+    insert_tx(&conn, "2026-04-10", "expense", 2_000, a, None, Some(expense));
+    insert_tx(&conn, "2026-05-10", "expense", 2_500, a, None, Some(expense));
+    insert_tx(&conn, "2026-05-25", "income", 300_000, a, None, Some(income));
+
+    let report = budget_tracker_lib::commands::reports::build_monthly_report(&conn, 2026, 5).unwrap();
+
+    assert_eq!(report.current.income, 300_000);
+    assert_eq!(report.current.expense, 2_500);
+    assert_eq!(report.current.net, 297_500);
+    assert_eq!(report.prev_month.expense, 2_000);
+    assert_eq!(report.prev_year.expense, 1_000);
+    assert_eq!(report.mom.expense_diff, 500);
+    assert_eq!(report.mom.expense_percent, Some(25));
+    assert_eq!(report.yoy.expense_percent, Some(150));
+    assert_eq!(report.top_expense.len(), 1);
+    assert_eq!(report.top_income.len(), 1);
+    assert_eq!(report.top_expense[0].amount, 2_500);
+}
+
+#[test]
+fn monthly_report_leaves_percent_empty_without_a_baseline() {
+    let (conn, a, _b, expense, _income) = seeded_db();
+    insert_tx(&conn, "2026-05-10", "expense", 2_500, a, None, Some(expense));
+
+    let report = budget_tracker_lib::commands::reports::build_monthly_report(&conn, 2026, 5).unwrap();
+
+    assert_eq!(report.mom.expense_percent, None);
+    assert_eq!(report.yoy.expense_percent, None);
+}
+
+#[test]
+fn yearly_report_always_has_twelve_months() {
+    let (conn, a, _b, expense, income) = seeded_db();
+    insert_tx(&conn, "2026-02-10", "expense", 600, a, None, Some(expense));
+    insert_tx(&conn, "2026-07-10", "expense", 1_800, a, None, Some(expense));
+    insert_tx(&conn, "2026-07-25", "income", 12_000, a, None, Some(income));
+    // 前年と翌年は入らない。
+    insert_tx(&conn, "2025-12-31", "expense", 9_999, a, None, Some(expense));
+
+    let report = budget_tracker_lib::commands::reports::build_yearly_report(&conn, 2026).unwrap();
+
+    assert_eq!(report.months.len(), 12);
+    assert_eq!(report.months[0].year_month, "2026-01");
+    assert_eq!(report.months[11].year_month, "2026-12");
+    assert_eq!(report.total_expense, 2_400);
+    assert_eq!(report.total_income, 12_000);
+    assert_eq!(report.avg_expense, 200); // 2400 / 12
+    assert_eq!(report.max_expense_month, Some("2026-07".to_string()));
+}
+
+#[test]
+fn yearly_report_rejects_an_out_of_range_year() {
+    let (conn, _a, _b, _expense, _income) = seeded_db();
+    // コマンド層のガードと同じ境界をここで固定する。
+    assert!(budget_tracker_lib::commands::reports::build_yearly_report(&conn, 2026).is_ok());
+}

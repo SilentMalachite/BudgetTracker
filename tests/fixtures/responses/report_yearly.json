@@ -1,0 +1,71 @@
+{
+  "year": 2026,
+  "months": [
+    {
+      "year_month": "2026-01",
+      "income": 320000,
+      "expense": 120000
+    },
+    {
+      "year_month": "2026-02",
+      "income": 320000,
+      "expense": 120000
+    },
+    {
+      "year_month": "2026-03",
+      "income": 320000,
+      "expense": 120000
+    },
+    {
+      "year_month": "2026-04",
+      "income": 320000,
+      "expense": 120000
+    },
+    {
+      "year_month": "2026-05",
+      "income": 320000,
+      "expense": 148600
+    },
+    {
+      "year_month": "2026-06",
+      "income": 320000,
+      "expense": 120000
+    },
+    {
+      "year_month": "2026-07",
+      "income": 320000,
+      "expense": 120000
+    },
+    {
+      "year_month": "2026-08",
+      "income": 320000,
+      "expense": 120000
+    },
+    {
+      "year_month": "2026-09",
+      "income": 320000,
+      "expense": 120000
+    },
+    {
+      "year_month": "2026-10",
+      "income": 320000,
+      "expense": 120000
+    },
+    {
+      "year_month": "2026-11",
+      "income": 320000,
+      "expense": 120000
+    },
+    {
+      "year_month": "2026-12",
+      "income": 320000,
+      "expense": 120000
+    }
+  ],
+  "total_income": 3840000,
+  "total_expense": 1468600,
+  "net": 2371400,
+  "avg_income": 320000,
+  "avg_expense": 122383,
+  "max_expense_month": "2026-05"
+}

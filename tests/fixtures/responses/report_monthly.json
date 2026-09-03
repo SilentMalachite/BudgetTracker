@@ -1,0 +1,45 @@
+{
+  "current": {
+    "income": 320000,
+    "expense": 148600,
+    "net": 171400
+  },
+  "prev_month": {
+    "income": 320000,
+    "expense": 132400,
+    "net": 187600
+  },
+  "prev_year": {
+    "income": 300000,
+    "expense": 0,
+    "net": 300000
+  },
+  "mom": {
+    "income_diff": 0,
+    "expense_diff": 16200,
+    "net_diff": -16200,
+    "expense_percent": 12
+  },
+  "yoy": {
+    "income_diff": 20000,
+    "expense_diff": 148600,
+    "net_diff": -128600,
+    "expense_percent": null
+  },
+  "top_expense": [
+    {
+      "category_id": 1,
+      "name": "食費",
+      "type": "expense",
+      "amount": 148600
+    }
+  ],
+  "top_income": [
+    {
+      "category_id": 2,
+      "name": "給与",
+      "type": "income",
+      "amount": 320000
+    }
+  ]
+}
