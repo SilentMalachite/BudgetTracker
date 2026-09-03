@@ -172,4 +172,57 @@ test('a skipped rule is flagged in the banner and on its own row', async ({ page
   await page.getByRole('button', { name: '編集' }).click();
   await page.getByTestId('recurring-save').click();
   await expect(badge).toHaveCount(0);
+
+  // アプリシェルのバナーも同じ結果を読む。バッジだけ消えてバナーが古い件数を出した
+  // ままだと、直したのに「1 件見送りました」と言い続けることになる。
+  await expect(page.getByTestId('recurring-skip-banner')).toHaveCount(0);
+});
+
+test('a failed startup expansion is visible and retryable from the recurring screen', async ({
+  page,
+}) => {
+  await installReadyBootMock(page);
+
+  await page.addInitScript(
+    (fixtures) => {
+      // 起動時の展開だけ失敗させ、2 回目 (画面からの再試行) は成功させる。
+      const state = { attempts: 0 };
+      const internals = (window as any).__TAURI_INTERNALS__ ?? {};
+      const previous = internals.invoke;
+      internals.invoke = async (command: string, args: any) => {
+        switch (command) {
+          case 'expand_due_recurring':
+            state.attempts += 1;
+            if (state.attempts === 1) throw new Error('database is locked');
+            return { generated: 2, rules: [], skipped: [] };
+          case 'list_accounts':
+            return fixtures.accounts;
+          case 'list_categories':
+            return fixtures.categories;
+          case 'list_recurring_rules':
+            return [{ rule: fixtures.rule, next_occurrence: '2026-02-27' }];
+          default:
+            return typeof previous === 'function' ? previous(command, args) : null;
+        }
+      };
+      (window as any).__TAURI_INTERNALS__ = internals;
+    },
+    { accounts: seededAccounts, categories: seededCategories, rule: createdRule },
+  );
+
+  await page.goto('/');
+
+  // 展開に失敗してもアプリは開く。ただし黙って飲み込まない。
+  await expect(page.getByTestId('nav-recurring')).toBeVisible();
+  const failureBanner = page.getByTestId('recurring-expansion-error-banner');
+  await expect(failureBanner).toContainText('database is locked');
+
+  await failureBanner.getByRole('link').click();
+
+  // 再試行はユーザーが探しに来る場所 (定期取引画面) にある。
+  await page.getByTestId('recurring-expansion-retry').click();
+
+  await expect(page.getByTestId('recurring-expansion-error')).toHaveCount(0);
+  await expect(failureBanner).toHaveCount(0);
+  await expect(page.getByTestId('recurring-expansion-banner')).toContainText('2 件');
 });
