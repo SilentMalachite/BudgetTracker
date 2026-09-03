@@ -419,7 +419,7 @@ fn an_update_cannot_repoint_a_rule_onto_a_different_archived_account() {
 fn preview_counts_the_backfill_a_past_starts_on_would_create() {
     // 2026-01-27 開始・毎月 27 日。today = 2026-05-01 なら 1〜4 月の 4 件。
     let preview =
-        recurring_cmd::preview_for_input(&input_expense(1, 2), date(2026, 5, 1), 100).unwrap();
+        recurring_cmd::preview_for_input(&input_expense(1, 2), None, date(2026, 5, 1), 100).unwrap();
 
     assert_eq!(preview.backfill_total, 4);
     assert_eq!(
@@ -432,7 +432,7 @@ fn preview_counts_the_backfill_a_past_starts_on_would_create() {
 #[test]
 fn preview_truncates_the_backfill_at_the_limit_but_keeps_the_total() {
     let preview =
-        recurring_cmd::preview_for_input(&input_expense(1, 2), date(2026, 5, 1), 2).unwrap();
+        recurring_cmd::preview_for_input(&input_expense(1, 2), None, date(2026, 5, 1), 2).unwrap();
 
     assert_eq!(preview.backfill_total, 4);
     assert_eq!(preview.backfill, vec!["2026-01-27", "2026-02-27"]);
@@ -442,7 +442,7 @@ fn preview_truncates_the_backfill_at_the_limit_but_keeps_the_total() {
 #[test]
 fn preview_lists_the_next_three_upcoming_dates() {
     let preview =
-        recurring_cmd::preview_for_input(&input_expense(1, 2), date(2026, 5, 1), 100).unwrap();
+        recurring_cmd::preview_for_input(&input_expense(1, 2), None, date(2026, 5, 1), 100).unwrap();
 
     assert_eq!(preview.upcoming, vec!["2026-05-27", "2026-06-27", "2026-07-27"]);
 }
@@ -453,7 +453,7 @@ fn preview_of_a_future_rule_has_no_backfill() {
         starts_on: "2026-09-27".into(),
         ..input_expense(1, 2)
     };
-    let preview = recurring_cmd::preview_for_input(&future, date(2026, 5, 1), 100).unwrap();
+    let preview = recurring_cmd::preview_for_input(&future, None, date(2026, 5, 1), 100).unwrap();
 
     assert_eq!(preview.backfill_total, 0);
     assert!(preview.backfill.is_empty());
@@ -466,7 +466,96 @@ fn preview_rejects_a_malformed_rule_without_touching_the_database() {
         frequency: "daily".into(),
         ..input_expense(1, 2)
     };
-    assert!(recurring_cmd::preview_for_input(&broken, date(2026, 5, 1), 100).is_err());
+    assert!(recurring_cmd::preview_for_input(&broken, None, date(2026, 5, 1), 100).is_err());
+}
+
+/// 編集中のルールは `last_generated_on` を窓の左端 (排他) として数える。
+/// これを渡さないと、すでに生成し終えた過去まで「今すぐ生成されます」に数え上げて
+/// しまい、プレビューが起きもしない backfill を報告する。
+#[test]
+fn preview_after_a_watermark_counts_only_the_dates_still_missing() {
+    let input = input_expense(1, 2);
+
+    // 窓を開いたまま数えると 1〜4 月の 4 件。
+    let from_scratch =
+        recurring_cmd::preview_for_input(&input, None, date(2026, 5, 1), 100).unwrap();
+    assert_eq!(from_scratch.backfill_total, 4);
+
+    // 3/27 まで生成済みなら、残るのは 4/27 の 1 件だけ。
+    let after_watermark =
+        recurring_cmd::preview_for_input(&input, Some(date(2026, 3, 27)), date(2026, 5, 1), 100)
+            .unwrap();
+    assert_eq!(after_watermark.backfill_total, 1);
+    assert_eq!(after_watermark.backfill, vec!["2026-04-27"]);
+
+    // today まで調べ終えたルールは backfill ゼロ。編集しても過去には遡らない。
+    let caught_up =
+        recurring_cmd::preview_for_input(&input, Some(date(2026, 5, 1)), date(2026, 5, 1), 100)
+            .unwrap();
+    assert_eq!(caught_up.backfill_total, 0);
+    assert!(caught_up.backfill.is_empty());
+    // upcoming は watermark ではなく today から数えるので窓を狭めても変わらない。
+    assert_eq!(
+        caught_up.upcoming,
+        vec!["2026-05-27", "2026-06-27", "2026-07-27"]
+    );
+}
+
+/// プレビューと展開が食い違えないことを保存済みルールで固定する。プレビューは
+/// 「保存したら何件生まれるか」の唯一の根拠なので、ここがずれたら確認は無意味。
+#[test]
+fn preview_with_the_stored_watermark_matches_what_expansion_generates() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    let rule =
+        recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+
+    // 3/1 までを展開して watermark を進める (1/27・2/27 の 2 件)。
+    recurring_cmd::expand_due_recurring_for_conn(&conn, date(2026, 3, 1), NOW).unwrap();
+
+    let stored = recurring_repo::find_by_id(&conn, rule.id).unwrap();
+    let after = stored.generated_through().unwrap();
+    let today = date(2026, 5, 1);
+
+    let preview =
+        recurring_cmd::preview_for_input(&input_expense(account_id, category_id), after, today, 100)
+            .unwrap();
+    let expanded = recurring_cmd::expand_due_recurring_for_conn(&conn, today, NOW).unwrap();
+
+    assert_eq!(preview.backfill_total, expanded.generated);
+    assert_eq!(preview.backfill_total, 2);
+    assert_eq!(preview.backfill, vec!["2026-03-27", "2026-04-27"]);
+}
+
+/// 健全なルールの watermark は展開のたびに today まで進む (190fddb)。窓が
+/// `(today, today]` になるので、周期や発生日を編集しても今の期間には何も生えない。
+/// 編集モーダルの「もう 1 件生成されることがあります」を外す根拠がこれ。
+#[test]
+fn editing_the_schedule_of_a_caught_up_rule_generates_nothing_today() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    let rule =
+        recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+
+    let today = date(2026, 5, 1);
+    recurring_cmd::expand_due_recurring_for_conn(&conn, today, NOW).unwrap();
+    let before = tx_count(&conn);
+
+    // 発生日を「今日より前の日」に付け替える。過去に遡るなら 5/15 ではなく 4/15 が生える。
+    recurring_cmd::update_rule_for_conn(
+        &conn,
+        rule.id,
+        RecurringRuleInput {
+            day_of_month: Some(15),
+            ..input_expense(account_id, category_id)
+        },
+    )
+    .unwrap();
+
+    let result = recurring_cmd::expand_due_recurring_for_conn(&conn, today, NOW).unwrap();
+
+    assert_eq!(result.generated, 0);
+    assert_eq!(tx_count(&conn), before);
 }
 
 fn tx_count(conn: &Connection) -> i64 {

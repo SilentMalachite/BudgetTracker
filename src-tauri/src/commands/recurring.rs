@@ -49,7 +49,7 @@ const UPCOMING_COUNT: usize = 3;
 /// 保存前に見せる発生日の内訳。
 #[derive(Debug, Clone, Serialize)]
 pub struct OccurrencePreview {
-    /// 保存した瞬間に生成される分 (starts_on から today まで)。`limit` で切られる。
+    /// 保存した瞬間に生成される分 (窓 `(after, today]`)。`limit` で切られる。
     pub backfill: Vec<String>,
     /// `limit` で切る前の backfill 総数。
     pub backfill_total: i64,
@@ -64,14 +64,21 @@ fn iso(date: NaiveDate) -> String {
 }
 
 /// 入力の形だけを見て発生日を数える。DB は触らない。
+///
+/// `after` は展開が使うのと同じ窓の左端 (排他) = `recurring_rules.last_generated_on`。
+/// 新規作成は `None`、編集は保存済みの watermark を渡す。渡さないと、すでに生成
+/// 済みの過去まで「今すぐ生成されます」に数え上げ、プレビューが起きもしない
+/// backfill を報告してしまう。`expand_due_recurring_for_conn` と同じ
+/// `occurrences_between` を同じ引数で呼ぶことで、両者は食い違えない。
 pub fn preview_for_input(
     input: &RecurringRuleInput,
+    after: Option<NaiveDate>,
     today: NaiveDate,
     limit: usize,
 ) -> AppResult<OccurrencePreview> {
     let schedule = validate(input)?.schedule();
 
-    let backfill_dates = recurring::occurrences_between(&schedule, None, today);
+    let backfill_dates = recurring::occurrences_between(&schedule, after, today);
     let backfill_total = backfill_dates.len() as i64;
     let truncated = backfill_dates.len() > limit;
     let backfill = backfill_dates.iter().take(limit).copied().map(iso).collect();
@@ -96,18 +103,24 @@ pub fn preview_for_input(
     })
 }
 
+/// `after` は編集中のルールの `last_generated_on` (ISO 日付)。新規作成は省略する。
 #[tauri::command]
 pub fn preview_recurring_occurrences(
     input: RecurringRuleInput,
     limit: u32,
+    after: Option<String>,
 ) -> AppResult<OccurrencePreview> {
     if !(1..=500).contains(&limit) {
         return Err(crate::error::AppError::InvalidArgument(format!(
             "limit must be 1..=500, got {limit}"
         )));
     }
+    let after = match after.as_deref() {
+        Some(raw) => Some(crate::domain::date::parse_iso_date("after", raw)?),
+        None => None,
+    };
     let today = chrono::Local::now().date_naive();
-    preview_for_input(&input, today, limit as usize)
+    preview_for_input(&input, after, today, limit as usize)
 }
 
 fn validate(input: &RecurringRuleInput) -> AppResult<ValidatedRule> {

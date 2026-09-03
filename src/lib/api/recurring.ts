@@ -96,11 +96,17 @@ export function setRecurringRuleActive(id: number, active: boolean): Promise<Rec
   return invoke<RecurringRule>('set_recurring_rule_active', { id, active });
 }
 
+/**
+ * `after` は編集中のルールの `last_generated_on`。展開が使う窓の左端 (排他) と
+ * 同じものを渡すので、プレビューの件数と実際に生成される件数は一致する。
+ * 新規作成は `null` (= `starts_on` から全部数える)。
+ */
 export function previewRecurringOccurrences(
   input: RecurringRuleInput,
   limit: number,
+  after: string | null = null,
 ): Promise<OccurrencePreview> {
-  return invoke<OccurrencePreview>('preview_recurring_occurrences', { input, limit });
+  return invoke<OccurrencePreview>('preview_recurring_occurrences', { input, limit, after });
 }
 
 export function expandDueRecurring(): Promise<ExpansionResult> {
