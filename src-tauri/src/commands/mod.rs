@@ -5,6 +5,7 @@ pub mod budgets;
 pub mod categories;
 pub mod meta;
 pub mod recovery;
+pub mod recurring;
 pub mod reports;
 pub mod settings;
 pub mod snapshots;

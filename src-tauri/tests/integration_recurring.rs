@@ -230,3 +230,95 @@ fn schedule_parses_the_stored_iso_dates() {
     assert_eq!(schedule.ends_on, None);
     assert_eq!(schedule.frequency, Frequency::Monthly);
 }
+
+use budget_tracker_lib::commands::recurring::{self as recurring_cmd, RecurringRuleInput};
+
+fn input_expense(account_id: i64, category_id: i64) -> RecurringRuleInput {
+    RecurringRuleInput {
+        name: "家賃".into(),
+        type_: "expense".into(),
+        amount: 85_000,
+        account_id,
+        counter_account_id: None,
+        category_id: Some(category_id),
+        description: "毎月の家賃".into(),
+        frequency: "monthly".into(),
+        day_of_month: Some(27),
+        day_of_week: None,
+        starts_on: "2026-01-27".into(),
+        ends_on: None,
+    }
+}
+
+#[test]
+fn create_rule_rejects_an_archived_account() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    conn.execute(
+        "UPDATE accounts SET archived_at = ?1 WHERE id = ?2",
+        params![NOW, account_id],
+    )
+    .unwrap();
+
+    let err = recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id))
+        .unwrap_err();
+    assert!(err.to_string().contains("archived"), "{err}");
+}
+
+#[test]
+fn create_rule_rejects_a_category_of_the_wrong_type() {
+    let conn = fresh();
+    let (account_id, _, _) = seed(&conn);
+    conn.execute(
+        "INSERT INTO categories(name, type, color, icon, display_order)
+         VALUES ('給与', 'income', NULL, NULL, 1)",
+        [],
+    )
+    .unwrap();
+    let income_category = conn.last_insert_rowid();
+
+    let err = recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, income_category))
+        .unwrap_err();
+    assert!(err.to_string().contains("does not match"), "{err}");
+}
+
+#[test]
+fn create_rule_rejects_an_unknown_account() {
+    let conn = fresh();
+    let (_, _, category_id) = seed(&conn);
+
+    assert!(recurring_cmd::create_rule_for_conn(&conn, input_expense(9_999, category_id)).is_err());
+}
+
+#[test]
+fn list_views_carry_the_next_occurrence() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+
+    let views = recurring_cmd::list_rule_views_for_conn(&conn, false, date(2026, 2, 1)).unwrap();
+
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0].next_occurrence.as_deref(), Some("2026-02-27"));
+}
+
+#[test]
+fn update_rule_revalidates_the_new_shape() {
+    let conn = fresh();
+    let (account_id, _, category_id) = seed(&conn);
+    let rule =
+        recurring_cmd::create_rule_for_conn(&conn, input_expense(account_id, category_id)).unwrap();
+
+    let broken = RecurringRuleInput {
+        day_of_month: Some(40),
+        ..input_expense(account_id, category_id)
+    };
+    assert!(recurring_cmd::update_rule_for_conn(&conn, rule.id, broken).is_err());
+
+    let fixed = RecurringRuleInput {
+        amount: 90_000,
+        ..input_expense(account_id, category_id)
+    };
+    let updated = recurring_cmd::update_rule_for_conn(&conn, rule.id, fixed).unwrap();
+    assert_eq!(updated.amount, 90_000);
+}
