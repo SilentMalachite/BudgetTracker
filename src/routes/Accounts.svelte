@@ -137,10 +137,19 @@
                 <span class="balance unavailable" data-testid={`account-balance-${account.id}`}>
                   <strong>取得できません</strong>
                 </span>
-              {:else}
+              {:else if balances.loading && !balanceById.has(account.id)}
                 <span class="balance" data-testid={`account-balance-${account.id}`}>
-                  <strong>{formatCurrency(balanceById.get(account.id) ?? account.initial_balance)}</strong>
-                  {#if (balanceById.get(account.id) ?? account.initial_balance) !== account.initial_balance}
+                  <small>…</small>
+                </span>
+              {:else if !balanceById.has(account.id)}
+                <span class="balance unavailable" data-testid={`account-balance-${account.id}`}>
+                  <strong>取得できません</strong>
+                </span>
+              {:else}
+                {@const computed = balanceById.get(account.id) ?? 0}
+                <span class="balance" data-testid={`account-balance-${account.id}`}>
+                  <strong>{formatCurrency(computed)}</strong>
+                  {#if computed !== account.initial_balance}
                     <small>初期 {formatCurrency(account.initial_balance)}</small>
                   {/if}
                 </span>
@@ -174,7 +183,7 @@
                 <span class="balance unavailable" data-testid={`account-balance-${account.id}`}>
                   <strong>取得できません</strong>
                 </span>
-              {:else if balances.loading}
+              {:else if balances.loading && !balanceById.has(account.id)}
                 <span class="balance" data-testid={`account-balance-${account.id}`}>
                   <small>…</small>
                 </span>

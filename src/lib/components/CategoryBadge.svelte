@@ -1,9 +1,12 @@
 <script lang="ts">
   import type { Category } from '../api/categories';
+  import { isHexColor } from '../utils/isHexColor';
 
   let { category }: { category: Category } = $props();
   const fallback = $derived(category.type === 'income' ? '#4FACFE' : '#FF7A85');
-  const bg = $derived(category.color ?? fallback);
+  // Only a strict #RRGGBB reaches the inline style; anything else (e.g. a value that
+  // bypassed Rust validation through backup import) falls back to the default colour.
+  const bg = $derived(isHexColor(category.color) ? category.color : fallback);
 </script>
 
 <span class="badge" style="background:{bg}">

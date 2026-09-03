@@ -121,13 +121,16 @@
         <input type="radio" name="import-mode" value="overwrite" bind:group={mode} />
         上書き
       </label>
-      <input
-        type="file"
-        accept="application/json"
-        onchange={onFileChosen}
-        disabled={busy}
-        data-testid="settings-import-file"
-      />
+      <label class="file">
+        JSON ファイルを選択
+        <input
+          type="file"
+          accept="application/json"
+          onchange={onFileChosen}
+          disabled={busy}
+          data-testid="settings-import-file"
+        />
+      </label>
 
       {#if message}
         <p class="message">{message}</p>
@@ -197,7 +200,9 @@
     padding: var(--space-1) 0;
   }
 
-  input[type='file'] {
+  .file {
+    display: grid;
+    gap: var(--space-2);
     margin-top: var(--space-3);
   }
 

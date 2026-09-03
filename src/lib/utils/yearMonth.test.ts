@@ -1,5 +1,22 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { isoToday, monthRange } from './yearMonth';
+import { isYearMonth, isoToday, monthRange } from './yearMonth';
+
+describe('isYearMonth', () => {
+  it('accepts YYYY-MM with a month between 01 and 12', () => {
+    expect(isYearMonth('2026-01')).toBe(true);
+    expect(isYearMonth('2026-12')).toBe(true);
+  });
+
+  it('rejects a cleared or partially typed month input', () => {
+    expect(isYearMonth('')).toBe(false);
+    expect(isYearMonth('2026')).toBe(false);
+    expect(isYearMonth('2026-')).toBe(false);
+    expect(isYearMonth('2026-1')).toBe(false);
+    expect(isYearMonth('2026-00')).toBe(false);
+    expect(isYearMonth('2026-13')).toBe(false);
+    expect(isYearMonth('2026-02-01')).toBe(false);
+  });
+});
 
 describe('isoToday', () => {
   afterEach(() => {

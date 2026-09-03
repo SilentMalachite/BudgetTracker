@@ -11,7 +11,7 @@
   import type { Category } from '../lib/api/categories';
   import { createBudgetsStore } from '../lib/stores/budgets.svelte';
   import { formatCurrency } from '../lib/utils/formatCurrency';
-  import { isoToday } from '../lib/utils/yearMonth';
+  import { isYearMonth, isoToday } from '../lib/utils/yearMonth';
 
   const initialMonth = isoToday().slice(0, 7);
   let selectedMonth = $state(initialMonth);
@@ -27,10 +27,21 @@
   let formError = $state<string | null>(null);
 
   function shiftMonth(delta: number) {
-    const [year, month] = selectedMonth.split('-').map((part) => Number.parseInt(part, 10));
+    // A cleared <input type="month"> leaves selectedMonth as ''. Shift from the store's
+    // last valid month instead so 前月/翌月 never produce "NaN-NaN".
+    const base = isYearMonth(selectedMonth) ? selectedMonth : store.yearMonth;
+    const [year, month] = base.split('-').map((part) => Number.parseInt(part, 10));
     const next = new Date(year, month - 1 + delta, 1);
     selectedMonth = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`;
     store.setYearMonth(selectedMonth);
+  }
+
+  function onMonthChange() {
+    if (isYearMonth(selectedMonth)) {
+      store.setYearMonth(selectedMonth);
+    } else {
+      selectedMonth = store.yearMonth;
+    }
   }
 
   function asCategory(status: BudgetStatus): Category {
@@ -102,7 +113,7 @@
           type="month"
           bind:value={selectedMonth}
           data-testid="budget-month"
-          onchange={() => store.setYearMonth(selectedMonth)}
+          onchange={onMonthChange}
         />
       </label>
       <Button variant="ghost" onclick={() => shiftMonth(1)}>

@@ -42,6 +42,15 @@ export function createTransactionsStore(
     try {
       const res = await listTransactions(filter, page, pageSize);
       if (id !== requestId) return;
+      const lastPage = Math.floor((res.total - 1) / pageSize);
+      if (res.items.length === 0 && res.total > 0 && page > lastPage) {
+        // The current page fell off the end (e.g. its last row was deleted and
+        // data:changed reloaded us). Jump to the last page that still has rows.
+        // `page > lastPage` means page strictly decreases, so this cannot loop.
+        page = lastPage;
+        await load();
+        return;
+      }
       items = res.items;
       total = res.total;
     } catch (e) {
