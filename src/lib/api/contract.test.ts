@@ -25,22 +25,32 @@ import type { BudgetStatus } from './budgets';
 import type { Category, CategoryType } from './categories';
 import type { AppInfo } from './index';
 import type { MonthlyBucket, MonthlySummary } from './reports';
+import type {
+  ExpansionResult,
+  Frequency,
+  OccurrencePreview,
+  RecurringRuleView,
+  SkipReason,
+} from './recurring';
 import type { ListTransactionResult, TxType } from './transactions';
 
 import appError from '../../../tests/fixtures/responses/app_error.json';
 import appInfo from '../../../tests/fixtures/responses/app_info.json';
 import bootStatusReady from '../../../tests/fixtures/responses/boot_status.ready.json';
 import bootStatusRecovery from '../../../tests/fixtures/responses/boot_status.recovery.json';
+import expandDueRecurring from '../../../tests/fixtures/responses/expand_due_recurring.json';
 import exportBackupToFile from '../../../tests/fixtures/responses/export_backup_to_file.json';
 import importJson from '../../../tests/fixtures/responses/import_json.json';
 import listAccounts from '../../../tests/fixtures/responses/list_accounts.json';
 import listBalances from '../../../tests/fixtures/responses/list_balances.json';
 import listBudgetStatuses from '../../../tests/fixtures/responses/list_budget_statuses.json';
 import listCategories from '../../../tests/fixtures/responses/list_categories.json';
+import listRecurringRules from '../../../tests/fixtures/responses/list_recurring_rules.json';
 import listTopBudgetStatuses from '../../../tests/fixtures/responses/list_top_budget_statuses.json';
 import listTransactions from '../../../tests/fixtures/responses/list_transactions.json';
 import monthlySeries from '../../../tests/fixtures/responses/monthly_series.json';
 import monthlySummary from '../../../tests/fixtures/responses/monthly_summary.json';
+import previewRecurringOccurrences from '../../../tests/fixtures/responses/preview_recurring_occurrences.json';
 
 // ---------------------------------------------------------------------------
 // Compile-time helpers (no runtime effect)
@@ -109,6 +119,14 @@ const ACCOUNT_KINDS = members<AccountKind>({
 });
 const CATEGORY_TYPES = members<CategoryType>({ income: true, expense: true });
 const TX_TYPES = members<TxType>({ income: true, expense: true, transfer: true });
+const FREQUENCIES = members<Frequency>({ monthly: true, weekly: true, yearly: true });
+const SKIP_REASONS = members<SkipReason>({
+  archived_account: true,
+  archived_counter_account: true,
+  archived_category: true,
+  category_type_mismatch: true,
+  malformed_rule: true,
+});
 
 /** Fixture files asserted below; the last test checks nothing on disk is missing here. */
 const COVERED_FIXTURES = [
@@ -116,16 +134,19 @@ const COVERED_FIXTURES = [
   'app_info.json',
   'boot_status.ready.json',
   'boot_status.recovery.json',
+  'expand_due_recurring.json',
   'export_backup_to_file.json',
   'import_json.json',
   'list_accounts.json',
   'list_balances.json',
   'list_budget_statuses.json',
   'list_categories.json',
+  'list_recurring_rules.json',
   'list_top_budget_statuses.json',
   'list_transactions.json',
   'monthly_series.json',
   'monthly_summary.json',
+  'preview_recurring_occurrences.json',
 ];
 
 describe('Rust response fixtures match the TypeScript API types', () => {
@@ -239,6 +260,33 @@ describe('Rust response fixtures match the TypeScript API types', () => {
 
     expect(typeof appError).toBe('string');
     expect(appError.length).toBeGreaterThan(0);
+  });
+
+  it('list_recurring_rules is a RecurringRuleView[]', () => {
+    fixtureFits<RecurringRuleView[]>(listRecurringRules);
+    typeCovers<typeof listRecurringRules>(shapeOf<RecurringRuleView[]>());
+
+    for (const view of listRecurringRules) {
+      expect(TX_TYPES).toContain(view.rule.type);
+      expect(FREQUENCIES).toContain(view.rule.frequency);
+    }
+    // 停止中の振替ルールを 1 件含む: counter_account_id あり / category_id なし。
+    expect(listRecurringRules.some((v) => v.rule.counter_account_id !== null)).toBe(true);
+    expect(listRecurringRules.some((v) => v.next_occurrence === null)).toBe(true);
+  });
+
+  it('expand_due_recurring is an ExpansionResult with a known skip reason', () => {
+    fixtureFits<ExpansionResult>(expandDueRecurring);
+    typeCovers<typeof expandDueRecurring>(shapeOf<ExpansionResult>());
+
+    for (const skipped of expandDueRecurring.skipped) {
+      expect(SKIP_REASONS).toContain(skipped.reason);
+    }
+  });
+
+  it('preview_recurring_occurrences is an OccurrencePreview', () => {
+    fixtureFits<OccurrencePreview>(previewRecurringOccurrences);
+    typeCovers<typeof previewRecurringOccurrences>(shapeOf<OccurrencePreview>());
   });
 
   it('asserts every fixture file on disk', () => {
