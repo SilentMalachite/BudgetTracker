@@ -12,6 +12,13 @@ pub fn get_key(service: &str, account: &str) -> AppResult<Option<DbKey>> {
     match entry.get_password() {
         Ok(b64) => Ok(Some(decode_key(&b64)?)),
         Err(keyring::Error::NoEntry) => Ok(None),
+        // The entry exists but its bytes are not a string (non-UTF-8 on
+        // macOS / Linux, malformed UTF-16 on Windows). That is content
+        // corruption, not a platform failure: classify it like an
+        // undecodable base64 value so recovery is allowed to replace it.
+        Err(keyring::Error::BadEncoding(_)) => Err(AppError::Corrupt(
+            "corrupt keychain entry: stored secret is not valid text".into(),
+        )),
         Err(e) => Err(e.into()),
     }
 }
@@ -28,16 +35,15 @@ pub fn create_key(service: &str, account: &str) -> AppResult<DbKey> {
 }
 
 fn decode_key(b64: &str) -> AppResult<DbKey> {
-    let raw = STANDARD_NO_PAD.decode(b64.as_bytes())?;
-    if raw.len() != KEY_LEN {
-        return Err(AppError::Corrupt(format!(
+    let raw = STANDARD_NO_PAD.decode(b64.as_bytes()).map_err(|err| {
+        AppError::Corrupt(format!("corrupt keychain entry: invalid encoding: {err}"))
+    })?;
+    raw.try_into().map_err(|raw: Vec<u8>| {
+        AppError::Corrupt(format!(
             "corrupt keychain entry: stored key has wrong length: {}",
             raw.len()
-        )));
-    }
-    let mut out = [0u8; KEY_LEN];
-    out.copy_from_slice(&raw);
-    Ok(out)
+        ))
+    })
 }
 
 /// Retrieve the stored DB key or, if absent, generate a new 32-byte key,
@@ -77,9 +83,11 @@ mod tests {
     // so we provide a custom builder backed by a global HashMap.
     // ---------------------------------------------------------------------------
 
-    static STORE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    // Secrets are kept as raw bytes so tests can seed non-UTF-8 content and
+    // exercise keyring's BadEncoding path through `get_password`.
+    static STORE: OnceLock<Mutex<HashMap<String, Vec<u8>>>> = OnceLock::new();
 
-    fn store() -> &'static Mutex<HashMap<String, String>> {
+    fn store() -> &'static Mutex<HashMap<String, Vec<u8>>> {
         STORE.get_or_init(|| Mutex::new(HashMap::new()))
     }
 
@@ -93,15 +101,16 @@ mod tests {
 
     impl CredentialApi for PersistentMockCredential {
         fn set_secret(&self, secret: &[u8]) -> keyring::Result<()> {
-            let password = String::from_utf8(secret.to_vec())
-                .map_err(|_| keyring::Error::BadEncoding(secret.to_vec()))?;
-            store().lock().unwrap().insert(self.key.clone(), password);
+            store()
+                .lock()
+                .unwrap()
+                .insert(self.key.clone(), secret.to_vec());
             Ok(())
         }
 
         fn get_secret(&self) -> keyring::Result<Vec<u8>> {
             match store().lock().unwrap().get(&self.key).cloned() {
-                Some(v) => Ok(v.into_bytes()),
+                Some(v) => Ok(v),
                 None => Err(keyring::Error::NoEntry),
             }
         }
@@ -187,20 +196,49 @@ mod tests {
         delete_key("test", &a2).unwrap();
     }
 
-    #[test]
-    fn corrupt_entry_returns_corrupt_error() {
+    /// Seed a raw secret under a fresh account and assert `get_key` reports it
+    /// as `Corrupt` -- the classification recovery relies on to know the entry
+    /// is safe to delete and replace (a `Keychain` error would leave the user
+    /// stuck, see `commands::recovery::obtain_recovery_key`).
+    fn assert_stored_secret_is_corrupt(prefix: &str, secret: &[u8]) {
         ensure_mock();
-        let account = unique_account("corrupt");
-        // "c2hvcnQ" is the base64-NO-PAD encoding of "short" (5 bytes), which is != KEY_LEN
+        let account = unique_account(prefix);
         let entry = keyring::Entry::new("test", &account).unwrap();
-        entry.set_password("c2hvcnQ").unwrap();
-        let result = get_or_create_key("test", &account);
+        entry.set_secret(secret).unwrap();
+        let result = get_key("test", &account);
         assert!(
             matches!(result, Err(AppError::Corrupt(_))),
-            "expected Corrupt error, got: {:?}",
+            "unreadable keychain secret must be Corrupt so recovery can replace it, got: {:?}",
             result
         );
         delete_key("test", &account).unwrap();
+    }
+
+    #[test]
+    fn wrong_length_entry_returns_corrupt_error() {
+        // "c2hvcnQ" is the base64-NO-PAD encoding of "short" (5 bytes), which is != KEY_LEN
+        assert_stored_secret_is_corrupt("wrong-len", b"c2hvcnQ");
+    }
+
+    #[test]
+    fn invalid_base64_entry_returns_corrupt_error() {
+        assert_stored_secret_is_corrupt("bad-b64", b"not valid base64!!!");
+    }
+
+    #[test]
+    fn padded_standard_base64_entry_returns_corrupt_error() {
+        let padded = base64::engine::general_purpose::STANDARD.encode([7u8; KEY_LEN]);
+        assert!(
+            padded.contains('='),
+            "fixture must use padded STANDARD encoding, got {padded}"
+        );
+        assert_stored_secret_is_corrupt("padded-b64", padded.as_bytes());
+    }
+
+    #[test]
+    fn non_utf8_entry_returns_corrupt_error() {
+        // keyring's get_password fails with BadEncoding before base64 is reached.
+        assert_stored_secret_is_corrupt("non-utf8", &[0xff, 0xfe, 0x80, 0x00]);
     }
 
     #[test]

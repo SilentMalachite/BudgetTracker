@@ -31,9 +31,6 @@ pub enum AppError {
     #[error("keychain error: {0}")]
     Keychain(#[from] keyring::Error),
 
-    #[error("base64 decode error: {0}")]
-    Base64(#[from] base64::DecodeError),
-
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
