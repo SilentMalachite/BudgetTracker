@@ -1,0 +1,22 @@
+{
+  "points": [
+    {
+      "year_month": "2026-03",
+      "net_worth": 1200000,
+      "net": 180000,
+      "net_moving_avg": null
+    },
+    {
+      "year_month": "2026-04",
+      "net_worth": 1387600,
+      "net": 187600,
+      "net_moving_avg": null
+    },
+    {
+      "year_month": "2026-05",
+      "net_worth": 1559000,
+      "net": 171400,
+      "net_moving_avg": 179666
+    }
+  ]
+}

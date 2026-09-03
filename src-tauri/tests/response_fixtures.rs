@@ -29,7 +29,10 @@ use budget_tracker_lib::commands::recovery::{BootState, BootStatus};
 use budget_tracker_lib::commands::recurring::{
     ExpansionResult, OccurrencePreview, RecurringRuleView, RuleExpansion, SkipReason, SkippedRule,
 };
-use budget_tracker_lib::commands::reports::{MonthlyReport, YearlyReport};
+use budget_tracker_lib::commands::reports::{
+    CategoryReport, MonthlyReport, NetWorthPoint, NetWorthReport, YearlyReport,
+};
+use budget_tracker_lib::domain::report::CategorySeries;
 use budget_tracker_lib::commands::settings::BackupFileResult;
 use budget_tracker_lib::commands::transactions::ListTransactionResult;
 use budget_tracker_lib::domain::account::{Account, AccountKind};
@@ -450,6 +453,72 @@ fn report_yearly() {
             avg_income: 320_000,
             avg_expense: 122_383,
             max_expense_month: Some("2026-05".into()),
+        },
+    );
+}
+
+#[test]
+fn report_by_category() {
+    check_fixture(
+        "report_by_category",
+        &CategoryReport {
+            months: vec!["2026-04".into(), "2026-05".into()],
+            income: vec![CategoryAggregate {
+                category_id: 2,
+                name: "給与".into(),
+                type_: "income".into(),
+                amount: 640_000,
+            }],
+            expense: vec![CategoryAggregate {
+                category_id: 1,
+                name: "食費".into(),
+                type_: "expense".into(),
+                amount: 281_000,
+            }],
+            series: vec![
+                CategorySeries {
+                    category_id: 2,
+                    name: "給与".into(),
+                    type_: "income".into(),
+                    points: vec![320_000, 320_000],
+                },
+                CategorySeries {
+                    category_id: 1,
+                    name: "食費".into(),
+                    type_: "expense".into(),
+                    points: vec![132_400, 148_600],
+                },
+            ],
+        },
+    );
+}
+
+#[test]
+fn report_net_worth_series() {
+    check_fixture(
+        "report_net_worth_series",
+        &NetWorthReport {
+            points: vec![
+                NetWorthPoint {
+                    year_month: "2026-03".into(),
+                    net_worth: 1_200_000,
+                    net: 180_000,
+                    // 窓が埋まらない先頭2点は null。
+                    net_moving_avg: None,
+                },
+                NetWorthPoint {
+                    year_month: "2026-04".into(),
+                    net_worth: 1_387_600,
+                    net: 187_600,
+                    net_moving_avg: None,
+                },
+                NetWorthPoint {
+                    year_month: "2026-05".into(),
+                    net_worth: 1_559_000,
+                    net: 171_400,
+                    net_moving_avg: Some(179_666),
+                },
+            ],
         },
     );
 }

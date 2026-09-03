@@ -70,3 +70,50 @@ export type YearlyReport = {
 export function reportYearly(year: number): Promise<YearlyReport> {
   return invoke<YearlyReport>('report_yearly', { year });
 }
+
+export type CategorySeries = {
+  category_id: number;
+  name: string;
+  type: 'income' | 'expense';
+  /** months と同じ長さ。取引の無い月は 0。 */
+  points: number[];
+};
+
+export type CategoryReport = {
+  months: string[];
+  income: CategoryAggregate[];
+  expense: CategoryAggregate[];
+  series: CategorySeries[];
+};
+
+export function reportByCategory(
+  fromYearMonth: string,
+  toYearMonth: string,
+): Promise<CategoryReport> {
+  return invoke<CategoryReport>('report_by_category', {
+    fromYearMonth,
+    toYearMonth,
+  });
+}
+
+export type NetWorthPoint = {
+  year_month: string;
+  net_worth: number;
+  net: number;
+  /** 3ヶ月移動平均。窓が埋まらない先頭2点は null。 */
+  net_moving_avg: number | null;
+};
+
+export type NetWorthReport = {
+  points: NetWorthPoint[];
+};
+
+export function reportNetWorthSeries(
+  fromYearMonth: string,
+  toYearMonth: string,
+): Promise<NetWorthReport> {
+  return invoke<NetWorthReport>('report_net_worth_series', {
+    fromYearMonth,
+    toYearMonth,
+  });
+}

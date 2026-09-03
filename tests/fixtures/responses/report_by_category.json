@@ -1,0 +1,42 @@
+{
+  "months": [
+    "2026-04",
+    "2026-05"
+  ],
+  "income": [
+    {
+      "category_id": 2,
+      "name": "給与",
+      "type": "income",
+      "amount": 640000
+    }
+  ],
+  "expense": [
+    {
+      "category_id": 1,
+      "name": "食費",
+      "type": "expense",
+      "amount": 281000
+    }
+  ],
+  "series": [
+    {
+      "category_id": 2,
+      "name": "給与",
+      "type": "income",
+      "points": [
+        320000,
+        320000
+      ]
+    },
+    {
+      "category_id": 1,
+      "name": "食費",
+      "type": "expense",
+      "points": [
+        132400,
+        148600
+      ]
+    }
+  ]
+}

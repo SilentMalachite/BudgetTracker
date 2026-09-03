@@ -31,6 +31,8 @@ const readyBootResults: Record<string, unknown> = {
     avg_expense: 0,
     max_expense_month: null,
   },
+  report_by_category: { months: [], income: [], expense: [], series: [] },
+  report_net_worth_series: { points: [] },
 };
 
 export function readyBootResult(command: string): unknown {

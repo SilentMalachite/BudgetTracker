@@ -6,7 +6,9 @@ import expandDueRecurring from './fixtures/responses/expand_due_recurring.json';
 import listBalances from './fixtures/responses/list_balances.json';
 import listTransactions from './fixtures/responses/list_transactions.json';
 import monthlySummary from './fixtures/responses/monthly_summary.json';
+import reportByCategory from './fixtures/responses/report_by_category.json';
 import reportMonthly from './fixtures/responses/report_monthly.json';
+import reportNetWorthSeries from './fixtures/responses/report_net_worth_series.json';
 import reportYearly from './fixtures/responses/report_yearly.json';
 
 /**
@@ -22,6 +24,8 @@ const objectResponses: Record<string, Record<string, unknown>> = {
   expand_due_recurring: expandDueRecurring,
   report_monthly: reportMonthly,
   report_yearly: reportYearly,
+  report_by_category: reportByCategory,
+  report_net_worth_series: reportNetWorthSeries,
 };
 
 const listResponses = [

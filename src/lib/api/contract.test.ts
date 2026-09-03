@@ -24,7 +24,14 @@ import type { BootStatus, RecoveryReason } from './boot';
 import type { BudgetStatus } from './budgets';
 import type { Category, CategoryType } from './categories';
 import type { AppInfo } from './index';
-import type { MonthlyBucket, MonthlyReport, MonthlySummary, YearlyReport } from './reports';
+import type {
+  CategoryReport,
+  MonthlyBucket,
+  MonthlyReport,
+  MonthlySummary,
+  NetWorthReport,
+  YearlyReport,
+} from './reports';
 import type {
   ExpansionResult,
   Frequency,
@@ -51,7 +58,9 @@ import listTransactions from '../../../tests/fixtures/responses/list_transaction
 import monthlySeries from '../../../tests/fixtures/responses/monthly_series.json';
 import monthlySummary from '../../../tests/fixtures/responses/monthly_summary.json';
 import previewRecurringOccurrences from '../../../tests/fixtures/responses/preview_recurring_occurrences.json';
+import reportByCategory from '../../../tests/fixtures/responses/report_by_category.json';
 import reportMonthly from '../../../tests/fixtures/responses/report_monthly.json';
+import reportNetWorthSeries from '../../../tests/fixtures/responses/report_net_worth_series.json';
 import reportYearly from '../../../tests/fixtures/responses/report_yearly.json';
 
 // ---------------------------------------------------------------------------
@@ -149,7 +158,9 @@ const COVERED_FIXTURES = [
   'monthly_series.json',
   'monthly_summary.json',
   'preview_recurring_occurrences.json',
+  'report_by_category.json',
   'report_monthly.json',
+  'report_net_worth_series.json',
   'report_yearly.json',
 ];
 
@@ -218,6 +229,25 @@ describe('Rust response fixtures match the TypeScript API types', () => {
     typeCovers<typeof reportYearly>(shapeOf<YearlyReport>());
 
     expect(reportYearly.months).toHaveLength(12);
+  });
+
+  it('report_by_category is a CategoryReport whose series match the month axis', () => {
+    fixtureFits<CategoryReport>(reportByCategory);
+    typeCovers<typeof reportByCategory>(shapeOf<CategoryReport>());
+
+    for (const series of reportByCategory.series) {
+      expect(CATEGORY_TYPES).toContain(series.type);
+      expect(series.points).toHaveLength(reportByCategory.months.length);
+    }
+  });
+
+  it('report_net_worth_series is a NetWorthReport with an empty average head', () => {
+    fixtureFits<NetWorthReport>(reportNetWorthSeries);
+    typeCovers<typeof reportNetWorthSeries>(shapeOf<NetWorthReport>());
+
+    // 窓が埋まる 3 点目まで移動平均は出ない。
+    expect(reportNetWorthSeries.points[0].net_moving_avg).toBeNull();
+    expect(reportNetWorthSeries.points[2].net_moving_avg).not.toBeNull();
   });
 
   it('list_transactions is a ListTransactionResult', () => {
