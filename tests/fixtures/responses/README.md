@@ -24,10 +24,13 @@ the Rust change.
 
 ## How the frontend uses them
 
-`src/lib/api/*.contract.test.ts` (Vitest) imports these files and asserts they
-satisfy the TypeScript response types, so a Rust rename that regenerates a
-fixture fails `pnpm test` / `pnpm check` until the TS side follows.
-Playwright E2E mocks may return these files instead of inline literals.
+`src/lib/api/contract.test.ts` (Vitest) imports these files and asserts they
+match the TypeScript response types in both directions (fixture -> type and
+type -> fixture key set) at `pnpm check` time, and pins enum-valued fields to
+the TS unions at `pnpm test` time, so a Rust rename that regenerates a fixture
+fails until the TS side follows. `tests/tauri-mock.test.ts` pins the Playwright
+ready-boot mock to the same key sets, and the Playwright flow specs spread these
+files to build their static per-step responses instead of inline literals.
 
 ## Files
 

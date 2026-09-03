@@ -16,6 +16,11 @@ export function readyBootResult(command: string): unknown {
   return readyBootResults[command] ?? null;
 }
 
+/** Commands the ready-boot mock answers; `tests/tauri-mock.test.ts` pins each to its fixture. */
+export function readyBootCommands(): string[] {
+  return Object.keys(readyBootResults);
+}
+
 export async function installReadyBootMock(page: Page): Promise<void> {
   await page.addInitScript((fixtures: Record<string, unknown>) => {
     const internals = (window as any).__TAURI_INTERNALS__ ?? {};

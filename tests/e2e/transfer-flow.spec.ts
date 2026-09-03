@@ -1,5 +1,8 @@
 import { expect, test } from '@playwright/test';
 
+import listBalancesFixture from '../fixtures/responses/list_balances.json' with { type: 'json' };
+import monthlySummaryFixture from '../fixtures/responses/monthly_summary.json' with { type: 'json' };
+
 const seededAccounts = [
   {
     id: 1,
@@ -27,8 +30,79 @@ const seededAccounts = [
   },
 ];
 
+// Shape of one `list_balances` row, spread from the Rust-generated fixture.
+const balanceRow = listBalancesFixture.accounts[0];
+
+// `list_balances` for each step of the scenario, keyed by how many transactions
+// exist. The numbers are this test's expectations (a transfer moves money between
+// accounts and never changes the total):
+//   0 tx: 現金 50,000 / 銀行 200,000 -> total 250,000
+//   1 tx: transfer 30,000 銀行 -> 現金:
+//         現金 50,000 + 30,000 = 80,000 / 銀行 200,000 - 30,000 = 170,000 -> total 250,000
+const balancesByTxCount = [
+  {
+    ...listBalancesFixture,
+    accounts: [
+      {
+        ...balanceRow,
+        account_id: 1,
+        name: '現金',
+        kind: 'cash',
+        initial_balance: 50_000,
+        balance: 50_000,
+        archived_at: null,
+        display_order: 0,
+      },
+      {
+        ...balanceRow,
+        account_id: 2,
+        name: '銀行',
+        kind: 'bank',
+        initial_balance: 200_000,
+        balance: 200_000,
+        archived_at: null,
+        display_order: 1,
+      },
+    ],
+    total_assets: 250_000,
+  },
+  {
+    ...listBalancesFixture,
+    accounts: [
+      {
+        ...balanceRow,
+        account_id: 1,
+        name: '現金',
+        kind: 'cash',
+        initial_balance: 50_000,
+        balance: 80_000,
+        archived_at: null,
+        display_order: 0,
+      },
+      {
+        ...balanceRow,
+        account_id: 2,
+        name: '銀行',
+        kind: 'bank',
+        initial_balance: 200_000,
+        balance: 170_000,
+        archived_at: null,
+        display_order: 1,
+      },
+    ],
+    total_assets: 250_000,
+  },
+];
+
+// `monthly_summary` for each step: transfers are excluded from income/expense
+// (CLAUDE.md rule 3), so both steps stay at zero.
+const monthlySummaryByTxCount = [
+  { ...monthlySummaryFixture, income: 0, expense: 0, net: 0, by_category: [] },
+  { ...monthlySummaryFixture, income: 0, expense: 0, net: 0, by_category: [] },
+];
+
 test('transfer moves money between accounts without changing total assets', async ({ page }) => {
-  await page.addInitScript((accounts) => {
+  await page.addInitScript(({ accounts, balancesByTxCount, monthlySummaryByTxCount }) => {
     type ListenerPayload = { event: string; id: number; payload: { domain: string } };
     type Tx = {
       id: number;
@@ -69,25 +143,13 @@ test('transfer moves money between accounts without changing total assets', asyn
       },
     };
 
-    function balances() {
-      return state.accounts.map((a: any) => {
-        let bal = a.initial_balance;
-        for (const t of state.transactions) {
-          if (t.type === 'income' && t.account_id === a.id) bal += t.amount;
-          else if (t.type === 'expense' && t.account_id === a.id) bal -= t.amount;
-          else if (t.type === 'transfer' && t.account_id === a.id) bal -= t.amount;
-          else if (t.type === 'transfer' && t.counter_account_id === a.id) bal += t.amount;
-        }
-        return {
-          account_id: a.id,
-          name: a.name,
-          kind: a.kind,
-          initial_balance: a.initial_balance,
-          balance: bal,
-          archived_at: a.archived_at,
-          display_order: a.display_order,
-        };
-      });
+    // Static per-step responses: the mock never re-derives Rust aggregates.
+    function stepResponse<T>(steps: T[], step: number): T {
+      const response = steps[step];
+      if (response === undefined) {
+        throw new Error('no fixture for step ' + step + ' (' + steps.length + ' steps defined)');
+      }
+      return response;
     }
 
     (window as any).__TAURI_INTERNALS__ = {
@@ -127,27 +189,14 @@ test('transfer moves money between accounts without changing total assets', asyn
               total: sorted.length,
             };
           }
-          case 'list_balances': {
-            const accounts = balances();
-            let total_assets = 0;
-            for (const account of accounts) {
-              if (account.archived_at == null) total_assets += account.balance;
-            }
-            return { accounts, total_assets };
-          }
+          case 'list_balances':
+            return stepResponse(balancesByTxCount, state.transactions.length);
           case 'list_budget_statuses':
             return [];
           case 'list_top_budget_statuses':
             return [];
-          case 'monthly_summary': {
-            const inc = state.transactions
-              .filter((t) => t.type === 'income')
-              .reduce((s, t) => s + t.amount, 0);
-            const exp = state.transactions
-              .filter((t) => t.type === 'expense')
-              .reduce((s, t) => s + t.amount, 0);
-            return { income: inc, expense: exp, net: inc - exp, by_category: [] };
-          }
+          case 'monthly_summary':
+            return stepResponse(monthlySummaryByTxCount, state.transactions.length);
           case 'monthly_series':
             return Array.from({ length: args.months }, (_, i) => ({
               year_month: `2026-${String(i + 1).padStart(2, '0')}`,
@@ -181,7 +230,7 @@ test('transfer moves money between accounts without changing total assets', asyn
         }
       },
     };
-  }, seededAccounts);
+  }, { accounts: seededAccounts, balancesByTxCount, monthlySummaryByTxCount });
 
   await page.goto('/');
 

@@ -5,7 +5,7 @@
 //! the webview) and compares the bytes with the checked-in JSON under
 //! `tests/fixtures/responses/` at the repository root.
 //!
-//! The frontend (`src/lib/api/*.contract.test.ts`, Playwright mocks) consumes
+//! The frontend (`src/lib/api/contract.test.ts`, Playwright mocks) consumes
 //! the same files, so a Rust-side rename or shape change fails here first and
 //! then surfaces in `pnpm check` / Vitest once the fixture is regenerated:
 //!

@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test';
 
+import monthlySummaryFixture from '../fixtures/responses/monthly_summary.json' with { type: 'json' };
+
 const seededCategories = [
   {
     id: 1,
@@ -36,9 +38,33 @@ const seededAccounts = [
   },
 ];
 
+// `monthly_summary` for each step of the scenario, keyed by how many transactions
+// exist. Shapes are spread from the Rust-generated fixture; the numbers are this
+// test's expectations (income/expense are plain sums, `net = income - expense`):
+//   0 tx: income 0, expense 0, net 0
+//   1 tx: expense 1,500 in 食費 -> income 0, expense 1,500, net 0 - 1,500 = -1,500
+const monthlySummaryByTxCount = [
+  { ...monthlySummaryFixture, income: 0, expense: 0, net: 0, by_category: [] },
+  {
+    ...monthlySummaryFixture,
+    income: 0,
+    expense: 1_500,
+    net: -1_500,
+    by_category: [
+      {
+        ...monthlySummaryFixture.by_category[0],
+        category_id: 1,
+        name: '食費',
+        type: 'expense',
+        amount: 1_500,
+      },
+    ],
+  },
+];
+
 test('happy path: add transaction and see dashboard total update', async ({ page }) => {
   await page.addInitScript(
-    ({ categories, accounts }) => {
+    ({ categories, accounts, monthlySummaryByTxCount }) => {
       type ListenerPayload = { event: string; id: number; payload: { domain: string } };
       type Transaction = {
         id: number;
@@ -69,6 +95,15 @@ test('happy path: add transaction and see dashboard total update', async ({ page
         for (const id of listeners.get('data:changed') ?? []) {
           callbacks.get(id)?.({ event: 'data:changed', id, payload: { domain } });
         }
+      }
+
+      // Static per-step responses: the mock never re-derives Rust aggregates.
+      function stepResponse<T>(steps: T[], step: number): T {
+        const response = steps[step];
+        if (response === undefined) {
+          throw new Error('no fixture for step ' + step + ' (' + steps.length + ' steps defined)');
+        }
+        return response;
       }
 
       (window as any).__TAURI_EVENT_PLUGIN_INTERNALS__ = {
@@ -123,15 +158,8 @@ test('happy path: add transaction and see dashboard total update', async ({ page
                 total: sorted.length,
               };
             }
-            case 'monthly_summary': {
-              const income = state.transactions
-                .filter((transaction) => transaction.type === 'income')
-                .reduce((sum, transaction) => sum + transaction.amount, 0);
-              const expense = state.transactions
-                .filter((transaction) => transaction.type === 'expense')
-                .reduce((sum, transaction) => sum + transaction.amount, 0);
-              return { income, expense, net: income - expense, by_category: [] };
-            }
+            case 'monthly_summary':
+              return stepResponse(monthlySummaryByTxCount, state.transactions.length);
             case 'monthly_series':
               return Array.from({ length: args.months }, (_, index) => ({
                 year_month: `2026-${String(index + 1).padStart(2, '0')}`,
@@ -161,7 +189,7 @@ test('happy path: add transaction and see dashboard total update', async ({ page
         },
       };
     },
-    { categories: seededCategories, accounts: seededAccounts },
+    { categories: seededCategories, accounts: seededAccounts, monthlySummaryByTxCount },
   );
 
   await page.goto('/');

@@ -1,5 +1,8 @@
 import { expect, test } from '@playwright/test';
 
+import listBalancesFixture from '../fixtures/responses/list_balances.json' with { type: 'json' };
+import monthlySummaryFixture from '../fixtures/responses/monthly_summary.json' with { type: 'json' };
+
 const seededCategories = [
   {
     id: 1,
@@ -27,9 +30,73 @@ const seededAccounts = [
   },
 ];
 
+// Shape of one `list_balances` row, spread from the Rust-generated fixture.
+const balanceRow = listBalancesFixture.accounts[0];
+
+// `list_balances` for each step of the scenario, keyed by how many transactions
+// exist. The numbers are this test's expectations:
+//   0 tx: 現金 100,000 -> total 100,000
+//   1 tx: expense 45,000 in 食費: 現金 100,000 - 45,000 = 55,000 -> total 55,000
+const balancesByTxCount = [
+  {
+    ...listBalancesFixture,
+    accounts: [
+      {
+        ...balanceRow,
+        account_id: 1,
+        name: '現金',
+        kind: 'cash',
+        initial_balance: 100_000,
+        balance: 100_000,
+        archived_at: null,
+        display_order: 0,
+      },
+    ],
+    total_assets: 100_000,
+  },
+  {
+    ...listBalancesFixture,
+    accounts: [
+      {
+        ...balanceRow,
+        account_id: 1,
+        name: '現金',
+        kind: 'cash',
+        initial_balance: 100_000,
+        balance: 55_000,
+        archived_at: null,
+        display_order: 0,
+      },
+    ],
+    total_assets: 55_000,
+  },
+];
+
+// `monthly_summary` for each step (`net = income - expense`):
+//   0 tx: income 0, expense 0, net 0
+//   1 tx: expense 45,000 in 食費 -> income 0, expense 45,000, net 0 - 45,000 = -45,000
+const monthlySummaryByTxCount = [
+  { ...monthlySummaryFixture, income: 0, expense: 0, net: 0, by_category: [] },
+  {
+    ...monthlySummaryFixture,
+    income: 0,
+    expense: 45_000,
+    net: -45_000,
+    by_category: [
+      {
+        ...monthlySummaryFixture.by_category[0],
+        category_id: 1,
+        name: '食費',
+        type: 'expense',
+        amount: 45_000,
+      },
+    ],
+  },
+];
+
 test('budget warning appears on budgets page and dashboard', async ({ page }) => {
   await page.addInitScript(
-    ({ categories, accounts }) => {
+    ({ categories, accounts, balancesByTxCount, monthlySummaryByTxCount }) => {
       type ListenerPayload = { event: string; id: number; payload: { domain: string } };
       type Tx = {
         id: number;
@@ -153,23 +220,13 @@ test('budget warning appears on budgets page and dashboard', async ({ page }) =>
         };
       }
 
-      function balances() {
-        return state.accounts.map((account: any) => {
-          const balance = state.transactions.reduce((sum, tx) => {
-            if (tx.type === 'income' && tx.account_id === account.id) return sum + tx.amount;
-            if (tx.type === 'expense' && tx.account_id === account.id) return sum - tx.amount;
-            return sum;
-          }, account.initial_balance);
-          return {
-            account_id: account.id,
-            name: account.name,
-            kind: account.kind,
-            initial_balance: account.initial_balance,
-            balance,
-            archived_at: account.archived_at,
-            display_order: account.display_order,
-          };
-        });
+      // Static per-step responses: the mock never re-derives Rust aggregates.
+      function stepResponse<T>(steps: T[], step: number): T {
+        const response = steps[step];
+        if (response === undefined) {
+          throw new Error('no fixture for step ' + step + ' (' + steps.length + ' steps defined)');
+        }
+        return response;
       }
 
       (window as any).__TAURI_EVENT_PLUGIN_INTERNALS__ = {
@@ -212,14 +269,8 @@ test('budget warning appears on budgets page and dashboard', async ({ page }) =>
               return args.includeArchived
                 ? state.accounts
                 : state.accounts.filter((account: any) => account.archived_at == null);
-            case 'list_balances': {
-              const accounts = balances();
-              let total_assets = 0;
-              for (const account of accounts) {
-                if (account.archived_at == null) total_assets += account.balance;
-              }
-              return { accounts, total_assets };
-            }
+            case 'list_balances':
+              return stepResponse(balancesByTxCount, state.transactions.length);
             case 'list_transactions': {
               const sorted = [...state.transactions].sort((a, b) => b.id - a.id);
               return {
@@ -257,15 +308,8 @@ test('budget warning appears on budgets page and dashboard', async ({ page }) =>
               emitChanged('budgets');
               return budget;
             }
-            case 'monthly_summary': {
-              const income = state.transactions
-                .filter((tx) => tx.type === 'income')
-                .reduce((sum, tx) => sum + tx.amount, 0);
-              const expense = state.transactions
-                .filter((tx) => tx.type === 'expense')
-                .reduce((sum, tx) => sum + tx.amount, 0);
-              return { income, expense, net: income - expense, by_category: [] };
-            }
+            case 'monthly_summary':
+              return stepResponse(monthlySummaryByTxCount, state.transactions.length);
             case 'monthly_series':
               return Array.from({ length: args.months }, (_, index) => ({
                 year_month: `2026-${String(index + 1).padStart(2, '0')}`,
@@ -305,7 +349,12 @@ test('budget warning appears on budgets page and dashboard', async ({ page }) =>
         },
       };
     },
-    { categories: seededCategories, accounts: seededAccounts },
+    {
+      categories: seededCategories,
+      accounts: seededAccounts,
+      balancesByTxCount,
+      monthlySummaryByTxCount,
+    },
   );
 
   await page.goto('/');
