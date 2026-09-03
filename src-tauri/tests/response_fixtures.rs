@@ -430,9 +430,13 @@ fn import_json() {
         &ImportResult {
             categories: 12,
             accounts: 3,
+            recurring_rules: 2,
             transactions: 248,
             budgets: 4,
-            warnings: vec!["skipped duplicate category: 食費".into()],
+            warnings: vec![
+                "skipped duplicate category: 食費".into(),
+                "skipped duplicate recurring rule: 家賃".into(),
+            ],
         },
     );
 }

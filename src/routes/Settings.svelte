@@ -133,7 +133,7 @@
       const result = await importJson(await file.text(), mode);
       importStats = result;
       warnings = result.warnings;
-      message = `読み込み完了: カテゴリ ${result.categories} / 口座 ${result.accounts} / 取引 ${result.transactions} / 予算 ${result.budgets}`;
+      message = `読み込み完了: カテゴリ ${result.categories} / 口座 ${result.accounts} / 定期取引 ${result.recurring_rules} / 取引 ${result.transactions} / 予算 ${result.budgets}`;
       lastBackup = await getLastBackupAt();
       if (mode === 'overwrite') {
         await loadSnapshots();
@@ -200,8 +200,9 @@
       {/if}
       {#if importStats}
         <p class="stats">
-          カテゴリ {importStats.categories} / 口座 {importStats.accounts} / 取引
-          {importStats.transactions} / 予算 {importStats.budgets}
+          カテゴリ {importStats.categories} / 口座 {importStats.accounts} / 定期取引
+          {importStats.recurring_rules} / 取引 {importStats.transactions} / 予算
+          {importStats.budgets}
         </p>
       {/if}
       {#if warnings.length > 0}

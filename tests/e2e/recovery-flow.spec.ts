@@ -12,7 +12,14 @@ test('recovery screen is shown when boot_status is recovery', async ({ page }) =
         };
       }
       if (command === 'recover_import_json') {
-        return { categories: 0, accounts: 1, transactions: 0, budgets: 0, warnings: [] };
+        return {
+          categories: 0,
+          accounts: 1,
+          recurring_rules: 0,
+          transactions: 0,
+          budgets: 0,
+          warnings: [],
+        };
       }
       if (command === 'recover_start_empty') {
         return null;
