@@ -157,17 +157,17 @@
     saving = true;
     formError = null;
     try {
-      if (form.id === null) {
-        await createRecurringRule(toInput());
-        // 保存前に見せた「今すぐ N 件生成されます」を本当にする。展開は冪等なので
-        // ここで走らせても起動時展開と二重にはならない。
-        try {
-          latestExpansion = await expandDueRecurring();
-        } catch {
-          // 展開の失敗で、すでに成功した保存を失敗扱いにしない。次回起動で再試行される。
-        }
-      } else {
-        await updateRecurringRule(form.id, toInput());
+      if (form.id === null) await createRecurringRule(toInput());
+      else await updateRecurringRule(form.id, toInput());
+
+      // 新規なら、保存前に見せた「今すぐ N 件生成されます」を本当にする。編集なら、
+      // 参照先を直したルールの見送りバッジをその場で消す (直したのに「壊れている」と
+      // 出したままにしない) 上に、直った結果として生成されるべき分をここで生成する。
+      // 展開は冪等なので起動時展開と二重にはならない。
+      try {
+        latestExpansion = await expandDueRecurring();
+      } catch {
+        // 展開の失敗で、すでに成功した保存を失敗扱いにしない。次回起動で再試行される。
       }
       open = false;
       await rules.load();
