@@ -472,30 +472,127 @@ Phase 4 時点で実装済みの集計コマンド:
 - `monthly_summary(year, month)` — 指定月の収入 / 支出 / 差額（振替は除外）
 - `monthly_series(months)` — 当月を含む直近 N ヶ月（歯抜け月は 0 埋め）
 
-Phase 5b で追加する4タブ:
+この2本は Dashboard 用として現状のまま残し、Phase 5b では変更しない。前月比などの
+比較値を後付けすると既存の契約フィクスチャと Dashboard の表示契約を壊すため、
+レポート用のコマンドを別に新設する。
+
+#### タブ構成
 
 ```
 タブ: [月次] [年次] [カテゴリ別] [トレンド]
 
 [月次タブ]
-- 月別収支グラフ (既存と同等、Chart.js bar)
+- 月別収支グラフ (Chart.js bar、直近12ヶ月)
 - 前月比 / 前年同月比カード
-- 収支ランキング Top5 カテゴリ
+- 支出 Top5 / 収入 Top5 カテゴリ
 
 [年次タブ]
-- 月別の収入/支出スタックグラフ
+- 月別の収入/支出スタックグラフ (12ヶ月固定)
 - 年間サマリー (12ヶ月平均、最大支出月)
 
 [カテゴリ別タブ]
-- 円グラフ (収入の内訳、支出の内訳)
-- カテゴリ毎の月別推移ライングラフ
+- 円グラフ (収入の内訳 / 支出の内訳)
+- カテゴリ毎の月別推移ライン (円グラフのクリックで対象を切替)
 
 [トレンドタブ]
-- 純資産推移ライン (口座合計の時系列)
-- 移動平均 (3ヶ月)
+- 純資産推移ライン (非アーカイブ口座の合計の時系列)
+- 月次収支 (net) と、その3ヶ月移動平均
 ```
 
-- **集計クエリは Rust 側**: 現行は `monthly_summary` / `monthly_series`。Phase 5b で `report_yearly(year)` / `report_by_category(range)` / `report_net_worth_series(range)` を追加する
+#### 期間モデル
+
+コマンドは `from_year_month` / `to_year_month`（`"YYYY-MM"`）の閉区間を受け取る汎用
+レンジとする。UI はプリセット（直近6ヶ月 / 直近12ヶ月 / 直近24ヶ月 / 今年）で選ぶ。
+年次タブだけは年セレクタを別に持つ。
+
+commands 層のバリデーション:
+
+- `YearMonth::parse_key` で書式と範囲を検証する
+- `from <= to`
+- 区間長は最大 60ヶ月（既存 `monthly_series` の上限に揃える）
+- `month` は 1..=12
+
+#### コマンド
+
+| コマンド | 役割 |
+|---|---|
+| `report_monthly(year, month)` | 当月・前月・前年同月の収支、その差分、支出 / 収入それぞれの Top5 |
+| `report_yearly(year)` | 12ヶ月分のバケット、年間合計、12ヶ月平均、最大支出月 |
+| `report_by_category(from_year_month, to_year_month)` | 期間合計の内訳（収入 / 支出）と、カテゴリ毎の月別系列 |
+| `report_net_worth_series(from_year_month, to_year_month)` | 月末純資産、月次 net、3ヶ月移動平均 |
+
+戻り値の形:
+
+```
+MonthlyReport
+  current / prev_month / prev_year : { income, expense, net }
+  mom / yoy : { income_diff, expense_diff, net_diff, expense_percent: i64 | null }
+  top_expense / top_income : CategoryAggregate[]        // 各最大5件
+
+YearlyReport
+  months: MonthlyBucket[12]                            // 歯抜けは 0 埋め
+  total_income / total_expense / net
+  avg_income / avg_expense                             // 12 で割る
+  max_expense_month: "YYYY-MM" | null
+
+CategoryReport
+  months: string[]                                     // 軸ラベル
+  income / expense : CategoryAggregate[]               // 期間合計・降順
+  series: { category_id, name, type, points: i64[] }[] // points.len() == months.len()
+
+NetWorthReport
+  points: { year_month, net_worth, net, net_moving_avg: i64 | null }[]
+```
+
+- `expense_percent` は比較対象の支出が 0 のとき `null`。0除算をフロントに出さない
+- 移動平均は独立した配列にせず point に同居させる。別配列だとラベルとの対応がずれうる。
+  窓が埋まらない先頭2点は `null`
+- 平均・パーセントは整数除算（規約1）。端数は 0 方向に切り捨てる
+- 年間平均はデータのある月数ではなく常に 12 で割る
+- 最大支出月が同額で並んだ場合は早い月を採る
+- 月次タブの「月別収支グラフ」は既存の `monthly_series(12)` を使う。`report_monthly` は
+  比較値と Top5 だけを担い、系列を二重に持たない
+- `NetWorthReport` の `net` は振替を除いた月次収支（規約3）、`net_worth` の月間増分は
+  振替を含む4方向の増減。アーカイブ口座との振替があった月は両者が一致しない。
+  これは定義どおりの挙動であり、UI では別々の指標として並べる
+
+#### 純資産推移の定義
+
+対象は **`archived_at IS NULL` の口座のみ**。Dashboard の「総資産」(`total_assets`) と
+同じ集合で、`to` が当月のとき系列の最終点が Dashboard の数字と一致することを不変条件と
+し、integration テストで固定する。
+
+集合の取り方には注意点がある。全口座を合算すれば振替は出金と入金で相殺されるが、
+アーカイブ口座を除くと相殺が崩れる。したがって月次の増減は、
+`balance_repo::LIST_BALANCES_SQL` と同じ4方向（income +、expense −、transfer 出 −、
+transfer 入 +）を `WHERE a.archived_at IS NULL` 付きで月別に集計して求める。
+
+- 開始残高 = 非アーカイブ口座の `initial_balance` 合計 + `from` より前の同じ増減の総和
+- 各月末の純資産 = 開始残高にその月までの増減を累積したもの
+- 残高のある口座をアーカイブすると、その分は過去も含めて系列全体から消える
+  （Dashboard の総資産と同じ振る舞い）
+
+「総収入 / 総支出」の集計は従来どおり `type IN ('income','expense')` で振替を除外する
+（規約3）。純資産の増減計算だけが振替を見る。
+
+#### カテゴリ別タブの絞り込み
+
+推移ラインは初期表示で支出上位5カテゴリ。`expense` は Rust 側で降順に並べて返すので、
+フロントは先頭5件を取るだけでよい（順位付けの計算はしない）。
+
+収入 / 支出どちらの円グラフでも、セグメントまたは凡例をクリックするとそのカテゴリだけの
+推移に切り替わる。同じカテゴリをもう一度クリックすると選択が解除され、初期表示の
+支出上位5カテゴリに戻る。`report_by_category` が期間内に取引のある全カテゴリの系列を
+一度に返すので、**切り替えで再 invoke はしない**。
+
+#### 実装上の分担
+
+- 集計は `domain/report.rs` の純粋関数と `infra/repo/report_repo.rs` の SQL に置く。
+  Svelte 側で差分・平均・移動平均・上位抽出を計算しない（規約2）
+- Chart.js の生成 / 更新 / 破棄は `src/lib/components/Chart.svelte` の共通ラッパーに
+  閉じる。Dashboard の月別収支グラフも同じラッパーに載せ替え、同じ定型を2箇所で持たない
+- タブ状態は `Reports.svelte` の `$state` に持ち、URL には載せない
+  （現行 router は `routePaths` の完全一致のみを扱う）
 - **エクスポート**: JSON は現行。Excel は Phase 6 以降。PDF出力は MVP 対象外
 
 ## 6. セキュリティ
@@ -597,3 +694,4 @@ Phase 5b で追加する4タブ:
 - 2026-09-03: §11 に SQLCipher 形式固定 (`cipher_compatibility = 4`)、破損鍵の退避、quarantine 時の journal 同時退避を追記
 - 2026-09-03: Phase 5 を 5a (定期取引) / 5b (レポート強化) に分割し、§5.4 に展開の実行位置・日付生成規則・アーカイブ参照時の扱い・コマンド一覧を確定
 - 2026-09-03: §5.4 にバックアップ追記時の定期取引ルールの同一性キーとマージ規則 (watermark は新しい方、`ends_on`/`active`/`description` は取り込み先) を追記
+- 2026-09-03: §5.6 を Phase 5b 実装向けに確定。レンジ型の期間モデル、4コマンドの戻り値、純資産推移を非アーカイブ口座のみで定義 (振替相殺が崩れるため月次増減は 4 方向集計)、移動平均は月次 net に対してかけ point に同居、カテゴリ推移は円グラフのクリックで切替 (再 invoke なし)、Chart.js は共通ラッパーに集約
