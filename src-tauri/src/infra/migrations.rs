@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 
-use include_dir::{Dir, include_dir};
-use rusqlite::{Connection, params};
+use include_dir::{include_dir, Dir};
+use rusqlite::{params, Connection};
 
 use crate::error::{AppError, AppResult};
 
@@ -98,8 +98,9 @@ pub fn run(conn: &mut Connection) -> AppResult<u32> {
             continue;
         }
         let tx = conn.transaction()?;
-        tx.execute_batch(&m.sql)
-            .map_err(|e| AppError::Migration(format!("V{:03} ({}) failed: {e}", m.version, m.name)))?;
+        tx.execute_batch(&m.sql).map_err(|e| {
+            AppError::Migration(format!("V{:03} ({}) failed: {e}", m.version, m.name))
+        })?;
         tx.execute(
             "INSERT INTO app_meta(key, value) VALUES('schema_version', ?1)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -139,7 +140,10 @@ mod tests {
             "recurring_rules",
             "transactions",
         ] {
-            assert!(names.iter().any(|n| n == expected), "missing table {expected}");
+            assert!(
+                names.iter().any(|n| n == expected),
+                "missing table {expected}"
+            );
         }
     }
 
@@ -165,7 +169,10 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(exists, 1, "idx_tx_counter_account index must exist after V002");
+        assert_eq!(
+            exists, 1,
+            "idx_tx_counter_account index must exist after V002"
+        );
     }
 
     #[test]
@@ -173,17 +180,53 @@ mod tests {
         let mut conn = fresh();
         let version = run(&mut conn).unwrap();
         assert!(version >= 3, "expected V003 applied, got {version}");
-        for index_name in ["idx_budgets_category_starts", "idx_tx_budget_month_category"] {
-            let exists: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM sqlite_master
-                      WHERE type='index' AND name=?1",
-                    [index_name],
-                    |r| r.get(0),
-                )
-                .unwrap();
-            assert_eq!(exists, 1, "{index_name} index must exist after V003");
-        }
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                  WHERE type='index' AND name='idx_tx_budget_month_category'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            exists, 1,
+            "idx_tx_budget_month_category index must exist after V003"
+        );
+    }
+
+    #[test]
+    fn applies_v004_drop_duplicate_budget_index() {
+        // V001's UNIQUE(category_id, starts_on) already maintains an auto-index
+        // on budgets(category_id, starts_on); V003's explicit copy was redundant
+        // write amplification, so V004 drops it. The UNIQUE auto-index must stay.
+        let mut conn = fresh();
+        let version = run(&mut conn).unwrap();
+        assert!(version >= 4, "expected V004 applied, got {version}");
+        let duplicate: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                  WHERE type='index' AND name='idx_budgets_category_starts'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            duplicate, 0,
+            "idx_budgets_category_starts must be dropped by V004"
+        );
+        let unique_auto_index: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                  WHERE type='index' AND tbl_name='budgets'
+                    AND name LIKE 'sqlite_autoindex_budgets%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            unique_auto_index, 1,
+            "UNIQUE(category_id, starts_on) auto-index must remain"
+        );
     }
 
     #[test]
