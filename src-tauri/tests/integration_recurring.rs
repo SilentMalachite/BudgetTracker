@@ -469,6 +469,43 @@ fn preview_rejects_a_malformed_rule_without_touching_the_database() {
     assert!(recurring_cmd::preview_for_input(&broken, None, date(2026, 5, 1), 100).is_err());
 }
 
+/// `limit` は一覧を切るだけで、「最後にいつまで生成するか」は切らない。切られた
+/// 一覧の末尾を最後の発生日として見せると、件数が多い暴走ケースほど生成範囲を
+/// 短く見せてしまう — 確認が一番効かなければならない場面で。
+#[test]
+fn preview_reports_the_true_last_backfill_date_even_when_truncated() {
+    let long_run = RecurringRuleInput {
+        starts_on: "2016-01-01".into(),
+        day_of_month: Some(1),
+        ..input_expense(1, 2)
+    };
+
+    let preview = recurring_cmd::preview_for_input(&long_run, None, date(2026, 9, 3), 100).unwrap();
+
+    assert_eq!(preview.backfill_total, 129);
+    assert!(preview.truncated);
+    assert_eq!(preview.backfill.len(), 100);
+    // 一覧の末尾は 100 件目であって最後の発生日ではない。
+    assert_eq!(
+        preview.backfill.last().map(String::as_str),
+        Some("2024-04-01")
+    );
+    // 実際の生成はここまで届く。
+    assert_eq!(preview.backfill_last.as_deref(), Some("2026-09-01"));
+}
+
+#[test]
+fn preview_without_a_backfill_has_no_last_date() {
+    let future = RecurringRuleInput {
+        starts_on: "2026-09-27".into(),
+        ..input_expense(1, 2)
+    };
+
+    let preview = recurring_cmd::preview_for_input(&future, None, date(2026, 5, 1), 100).unwrap();
+
+    assert_eq!(preview.backfill_last, None);
+}
+
 /// 編集中のルールは `last_generated_on` を窓の左端 (排他) として数える。
 /// これを渡さないと、すでに生成し終えた過去まで「今すぐ生成されます」に数え上げて
 /// しまい、プレビューが起きもしない backfill を報告する。

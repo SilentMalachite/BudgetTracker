@@ -187,14 +187,12 @@
   /**
    * 「今すぐ何件生成されるか」を Rust に数えさせる。窓の左端は編集中のルールの
    * watermark なので、返る件数は展開が実際に作る件数と同じ。
+   *
+   * 数える対象は呼び出し側が切り取った `input`。フォームをここで読み直さないのは、
+   * 数えたものと保存するものを 1 つの値に固定するため。
    */
-  async function countOccurrences() {
-    const key = scheduleKey;
-    const counted = await previewRecurringOccurrences(
-      toInput(),
-      PREVIEW_LIMIT,
-      form.last_generated_on,
-    );
+  async function countOccurrences(input: RecurringRuleInput, key: string) {
+    const counted = await previewRecurringOccurrences(input, PREVIEW_LIMIT, form.last_generated_on);
     preview = counted;
     previewFor = key;
     return counted;
@@ -205,7 +203,7 @@
     formError = null;
     awaitingFor = null;
     try {
-      await countOccurrences();
+      await countOccurrences(toInput(), scheduleKey);
     } catch (e) {
       preview = null;
       previewFor = null;
@@ -217,21 +215,34 @@
     saving = true;
     formError = null;
     try {
+      // フォームを切り取るのはここ 1 回だけ。数えるのも書くのもこの同じ値なので、
+      // 「確認した件数」と「保存した内容」が別々の入力を指すことがない。
       // 画面に出ている件数ではなく、保存する入力そのものから数え直す。開始日を
       // 打ち間違えたまま何百件も生やす事故を止められるのは、この数え直しだけ。
       const key = scheduleKey;
-      const counted = await countOccurrences();
+      const input = toInput();
+      const counted = await countOccurrences(input, key);
+
+      // IPC の往復は 1 回ぶんとはいえ待ち時間で、その間も入力は触れる。フォームが
+      // 動いていたら、数えた件数も承諾も今の画面のものではない。黙って書くと
+      // 「承諾していない内容」が保存され、黙って止めると押しても何も起きない画面に
+      // なる。どちらも避けて、数え直しからやり直させる。
+      if (scheduleKey !== key) {
+        awaitingFor = null;
+        formError = '入力が変わったため保存を中断しました。もう一度保存してください。';
+        return;
+      }
 
       // backfill が出るときだけ、本当の件数を見せて明示的な承諾を取る。0 件なら
-      // (= 今日から始まるルール) 手順は増やさない。
+      // 手順は増やさない。
       if (counted.backfill_total > 0 && confirmedFor !== key) {
         awaitingFor = key;
         return;
       }
       awaitingFor = null;
 
-      if (form.id === null) await createRecurringRule(toInput());
-      else await updateRecurringRule(form.id, toInput());
+      if (form.id === null) await createRecurringRule(input);
+      else await updateRecurringRule(form.id, input);
 
       // 新規なら、保存前に見せた「今すぐ N 件生成されます」を本当にする。編集なら、
       // 参照先を直したルールの見送りバッジをその場で消す (直したのに「壊れている」と
@@ -412,11 +423,13 @@
     <div class="backfill-confirm" role="alert" data-testid="recurring-backfill-confirm">
       <p>
         過去にさかのぼって {pendingBackfill.backfill_total} 件の取引を今すぐ生成します。
-        {#if pendingBackfill.backfill.length > 0}
-          最初は {pendingBackfill.backfill[0]}、最後は
-          {pendingBackfill.backfill[pendingBackfill.backfill.length - 1]} です。
+        <!-- 日付は `backfill` の先頭と `backfill_last` から取る。`backfill` は
+             PREVIEW_LIMIT で切られるので、その末尾は「limit 件目」でしかなく、
+             件数が多いほど生成範囲を短く見せてしまう。 -->
+        {#if pendingBackfill.backfill.length > 0 && pendingBackfill.backfill_last}
+          最初は {pendingBackfill.backfill[0]}、最後は {pendingBackfill.backfill_last} です。
         {/if}
-        開始日が意図したものか確認してください。
+        生成される期間が意図したものか確認してください。
       </p>
       <Button
         onclick={confirmBackfillAndSave}
