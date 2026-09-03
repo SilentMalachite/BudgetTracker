@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use rusqlite::Connection;
 use serde::Serialize;
 use tauri::State;
 
@@ -71,12 +72,79 @@ fn unique_quarantine_path(data_dir: &Path, now: chrono::DateTime<chrono::Utc>) -
     }
 }
 
+/// SQLite side files that must travel with `data.db`. A hot `-journal` left
+/// beside a freshly created database would be rolled back into it.
+const SIDECAR_SUFFIXES: [&str; 3] = ["-journal", "-wal", "-shm"];
+
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
 fn quarantine_if_exists(data_dir: &Path, db_path: &Path) -> AppResult<()> {
-    if db_path.exists() {
-        let dest = unique_quarantine_path(data_dir, chrono::Utc::now());
-        std::fs::rename(db_path, dest)?;
+    if !db_path.exists() {
+        return Ok(());
+    }
+    let dest = unique_quarantine_path(data_dir, chrono::Utc::now());
+    std::fs::rename(db_path, &dest)?;
+    for suffix in SIDECAR_SUFFIXES {
+        let sidecar = with_suffix(db_path, suffix);
+        if sidecar.exists() {
+            std::fs::rename(&sidecar, with_suffix(&dest, suffix))?;
+        }
     }
     Ok(())
+}
+
+fn recovery_paths(inner: &AppInner, command: &str) -> AppResult<(PathBuf, PathBuf)> {
+    match inner {
+        AppInner::Recovery {
+            data_dir, db_path, ..
+        } => Ok((data_dir.clone(), db_path.clone())),
+        AppInner::Ready { .. } => Err(AppError::InvalidArgument(format!(
+            "{command} is only available during recovery"
+        ))),
+    }
+}
+
+/// Build a fresh encrypted database at `data.db.new`, let `populate` fill it,
+/// then swap it into place. The existing `data.db` (if any) is not touched
+/// until the new file is complete, so a failure part-way through leaves the
+/// user's data exactly where it was.
+fn install_fresh_db<T>(
+    data_dir: &Path,
+    db_path: &Path,
+    key: &DbKey,
+    populate: impl FnOnce(&mut Connection) -> AppResult<T>,
+) -> AppResult<(Connection, T)> {
+    let new_path = data_dir.join("data.db.new");
+    if new_path.exists() {
+        std::fs::remove_file(&new_path)?;
+    }
+    drop(std::fs::File::create(&new_path)?);
+
+    let result = (|| {
+        let mut conn = db::open_encrypted(&new_path, key)?;
+        migrations::run(&mut conn)?;
+        seed::seed_default_categories_if_needed(&mut conn)?;
+        let value = populate(&mut conn)?;
+        drop(conn);
+        Ok(value)
+    })();
+
+    match result {
+        Err(err) => {
+            let _ = std::fs::remove_file(&new_path);
+            Err(err)
+        }
+        Ok(value) => {
+            quarantine_if_exists(data_dir, db_path)?;
+            std::fs::rename(&new_path, db_path)?;
+            let conn = db::open_encrypted(db_path, key)?;
+            Ok((conn, value))
+        }
+    }
 }
 
 pub fn recover_import(
@@ -85,66 +153,24 @@ pub fn recover_import(
     payload: &str,
 ) -> AppResult<ImportResult> {
     let mut guard = lock_inner(inner)?;
-    let (data_dir, db_path) = match &*guard {
-        AppInner::Recovery {
-            data_dir, db_path, ..
-        } => (data_dir.clone(), db_path.clone()),
-        AppInner::Ready { .. } => {
-            return Err(AppError::InvalidArgument(
-                "recover_import is only available during recovery".into(),
-            ));
-        }
-    };
-
-    let new_path = data_dir.join("data.db.new");
-    if new_path.exists() {
-        std::fs::remove_file(&new_path)?;
-    }
-    drop(std::fs::File::create(&new_path)?);
-
-    let result = (|| {
-        let key = obtain_recovery_key(keys)?;
-        let mut conn = db::open_encrypted(&new_path, &key)?;
-        migrations::run(&mut conn)?;
-        seed::seed_default_categories_if_needed(&mut conn)?;
-        let imported = backup::import_snapshot_json(&mut conn, payload, "overwrite")?;
-        drop(conn);
-        Ok((key, imported))
-    })();
-
-    match result {
-        Err(err) => {
-            let _ = std::fs::remove_file(&new_path);
-            Err(err)
-        }
-        Ok((key, imported)) => {
-            quarantine_if_exists(&data_dir, &db_path)?;
-            std::fs::rename(&new_path, &db_path)?;
-            let conn = db::open_encrypted(&db_path, &key)?;
-            *guard = AppInner::Ready { conn, db_path };
-            Ok(imported)
-        }
-    }
+    let (data_dir, db_path) = recovery_paths(&guard, "recover_import")?;
+    // Obtain the key before touching any file: a Keychain failure must leave
+    // the existing database untouched.
+    let key = obtain_recovery_key(keys)?;
+    let (conn, imported) = install_fresh_db(&data_dir, &db_path, &key, |conn| {
+        backup::import_snapshot_json(conn, payload, "overwrite")
+    })?;
+    *guard = AppInner::Ready { conn, db_path };
+    Ok(imported)
 }
 
 pub fn recover_start_empty(inner: &Mutex<AppInner>, keys: &dyn KeyStore) -> AppResult<()> {
     let mut guard = lock_inner(inner)?;
-    let (data_dir, db_path) = match &*guard {
-        AppInner::Recovery {
-            data_dir, db_path, ..
-        } => (data_dir.clone(), db_path.clone()),
-        AppInner::Ready { .. } => {
-            return Err(AppError::InvalidArgument(
-                "recover_start_empty is only available during recovery".into(),
-            ));
-        }
-    };
-
-    quarantine_if_exists(&data_dir, &db_path)?;
+    let (data_dir, db_path) = recovery_paths(&guard, "recover_start_empty")?;
+    // Same ordering as recover_import: never quarantine a healthy data.db
+    // until a key is in hand and the replacement file is complete.
     let key = obtain_recovery_key(keys)?;
-    let mut conn = db::open_encrypted(&db_path, &key)?;
-    migrations::run(&mut conn)?;
-    seed::seed_default_categories_if_needed(&mut conn)?;
+    let (conn, ()) = install_fresh_db(&data_dir, &db_path, &key, |_| Ok(()))?;
     *guard = AppInner::Ready { conn, db_path };
     Ok(())
 }
@@ -205,10 +231,7 @@ mod tests {
     }
 
     fn keychain_error() -> AppError {
-        AppError::Keychain(keyring::Error::Invalid(
-            "target".into(),
-            "transient".into(),
-        ))
+        AppError::Keychain(keyring::Error::Invalid("target".into(), "transient".into()))
     }
 
     #[test]
@@ -276,5 +299,112 @@ mod tests {
             path.file_name().unwrap().to_str().unwrap(),
             "data.db.corrupt-20260829T123045Z-3"
         );
+    }
+
+    fn recovery_state(dir: &TempDir) -> (Mutex<AppInner>, PathBuf) {
+        let db_path = dir.path().join("data.db");
+        let inner = Mutex::new(AppInner::Recovery {
+            reason: RecoveryReason::KeychainError,
+            data_dir: dir.path().to_path_buf(),
+            db_path: db_path.clone(),
+        });
+        (inner, db_path)
+    }
+
+    /// Quarantined database files in `dir`, excluding their SQLite sidecars.
+    fn quarantined_databases(dir: &Path) -> Vec<PathBuf> {
+        let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                let name = path.file_name().unwrap().to_string_lossy();
+                name.starts_with("data.db.corrupt-")
+                    && !SIDECAR_SUFFIXES.iter().any(|s| name.ends_with(s))
+            })
+            .collect();
+        found.sort();
+        found
+    }
+
+    #[test]
+    fn start_empty_keeps_existing_db_when_key_cannot_be_obtained() {
+        let dir = TempDir::new().unwrap();
+        let (inner, db_path) = recovery_state(&dir);
+        std::fs::write(&db_path, b"old ledger").unwrap();
+        let keys = RecordingKeys {
+            get: || Err(keychain_error()),
+            create_calls: Mutex::new(0),
+            delete_calls: Mutex::new(0),
+        };
+
+        let err = recover_start_empty(&inner, &keys).unwrap_err();
+
+        assert!(matches!(err, AppError::Keychain(_)));
+        assert_eq!(
+            std::fs::read(&db_path).unwrap(),
+            b"old ledger",
+            "a healthy data.db must stay in place when no key is available"
+        );
+        assert!(quarantined_databases(dir.path()).is_empty());
+        assert!(!dir.path().join("data.db.new").exists());
+        assert!(matches!(*inner.lock().unwrap(), AppInner::Recovery { .. }));
+    }
+
+    #[test]
+    fn start_empty_quarantines_old_db_and_opens_fresh_one() {
+        let dir = TempDir::new().unwrap();
+        let (inner, db_path) = recovery_state(&dir);
+        std::fs::write(&db_path, b"old ledger").unwrap();
+        std::fs::write(with_suffix(&db_path, "-journal"), b"hot journal").unwrap();
+        let keys = RecordingKeys {
+            get: || Ok(Some([9u8; KEY_LEN])),
+            create_calls: Mutex::new(0),
+            delete_calls: Mutex::new(0),
+        };
+
+        recover_start_empty(&inner, &keys).unwrap();
+
+        let quarantined = quarantined_databases(dir.path());
+        assert_eq!(quarantined.len(), 1);
+        assert_eq!(std::fs::read(&quarantined[0]).unwrap(), b"old ledger");
+        assert_eq!(
+            std::fs::read(with_suffix(&quarantined[0], "-journal")).unwrap(),
+            b"hot journal"
+        );
+        assert!(
+            !with_suffix(&db_path, "-journal").exists(),
+            "a stale journal must not be left beside the fresh database"
+        );
+        assert!(!dir.path().join("data.db.new").exists());
+        assert!(matches!(*inner.lock().unwrap(), AppInner::Ready { .. }));
+
+        let conn = db::open_encrypted(&db_path, &[9u8; KEY_LEN]).unwrap();
+        let categories: i64 = conn
+            .query_row("SELECT count(*) FROM categories", [], |r| r.get(0))
+            .unwrap();
+        assert!(categories > 0, "fresh database must be migrated and seeded");
+    }
+
+    #[test]
+    fn quarantine_moves_sqlite_sidecars_with_the_database() {
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("data.db");
+        std::fs::write(&db_path, b"db").unwrap();
+        for suffix in SIDECAR_SUFFIXES {
+            std::fs::write(with_suffix(&db_path, suffix), suffix.as_bytes()).unwrap();
+        }
+
+        quarantine_if_exists(dir.path(), &db_path).unwrap();
+
+        assert!(!db_path.exists());
+        let quarantined = quarantined_databases(dir.path());
+        assert_eq!(quarantined.len(), 1);
+        for suffix in SIDECAR_SUFFIXES {
+            assert!(!with_suffix(&db_path, suffix).exists());
+            assert_eq!(
+                std::fs::read(with_suffix(&quarantined[0], suffix)).unwrap(),
+                suffix.as_bytes()
+            );
+        }
     }
 }

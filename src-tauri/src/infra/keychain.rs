@@ -49,11 +49,13 @@ fn decode_key(b64: &str) -> AppResult<DbKey> {
 /// Retrieve the stored DB key or, if absent, generate a new 32-byte key,
 /// store it in the OS keychain, and return it.
 ///
-/// Test-only / legacy wrapper. Production boot must call `get_key` / `create_key`
-/// explicitly so an existing `data.db` never gets a freshly minted key.
+/// Test-only wrapper. Production boot must call `get_key` / `create_key`
+/// explicitly so an existing `data.db` never gets a freshly minted key; this
+/// is compiled out of release builds so no production path can reach it.
 ///
 /// `service` typically: "jp.budget-tracker"
 /// `account` typically: "db_key"
+#[cfg(test)]
 pub fn get_or_create_key(service: &str, account: &str) -> AppResult<DbKey> {
     match get_key(service, account)? {
         Some(key) => Ok(key),
