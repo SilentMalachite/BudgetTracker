@@ -945,6 +945,43 @@ fn append_import_keeps_a_rule_that_differs_only_by_category() {
     );
 }
 
+/// 重複判定は `category_id` が NULL のルール — つまり全ての振替 — でも効かなければ
+/// ならない。キーの NULL 安全な比較 (`IS`) を `=` に落とすと NULL 同士が一致しなく
+/// なり、振替ルールだけが毎回すり抜けて、この仕組みが防ぐはずの毎月の二重課金が
+/// そのまま残る。カテゴリ付きのルールを使う自己インポートのテストではそこを踏まない。
+#[test]
+fn append_importing_a_transfer_rule_into_its_own_db_keeps_one_rule() {
+    let mut conn = db_with_transfer_rule("銀行A");
+    let snapshot = backup::export_snapshot_json(&conn).unwrap();
+
+    let result = backup::import_snapshot_json(&mut conn, &snapshot, "append").unwrap();
+
+    assert_eq!(count(&conn, "recurring_rules"), 1);
+    assert_eq!(result.recurring_rules, 0);
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w == "skipped duplicate recurring rule: 振替"),
+        "{:?}",
+        result.warnings
+    );
+
+    // 実害はここ: 取り込み後の展開が各日付を 1 回だけ生成する (2 回ではない)。
+    let expansion = recurring_cmd::expand_due_recurring_for_conn(
+        &conn,
+        NaiveDate::from_ymd_opt(2026, 8, 1).unwrap(),
+        NOW,
+    )
+    .unwrap();
+
+    assert_eq!(expansion.generated, 3);
+    assert_eq!(
+        occurred_dates(&conn),
+        vec!["2026-05-25", "2026-06-25", "2026-07-25"]
+    );
+}
+
 /// 振替先が違えば別のルール。振替先は口座 id ではなく口座行の同一性で見るので、
 /// 追記が口座を複製したあとでも取り違えない。
 #[test]
