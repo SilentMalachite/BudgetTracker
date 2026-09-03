@@ -386,3 +386,99 @@ fn yearly_report_always_has_twelve_months() {
     assert_eq!(report.avg_expense, 200); // 2400 / 12
     assert_eq!(report.max_expense_month, Some("2026-07".to_string()));
 }
+
+use budget_tracker_lib::commands::reports::range_months;
+
+#[test]
+fn range_months_lists_the_closed_interval() {
+    let months = range_months("2026-03", "2026-05").unwrap();
+    assert_eq!(months, vec!["2026-03", "2026-04", "2026-05"]);
+    assert_eq!(range_months("2026-05", "2026-05").unwrap().len(), 1);
+}
+
+#[test]
+fn range_months_rejects_bad_ranges() {
+    assert!(range_months("2026-05", "2026-04").is_err()); // 逆転
+    assert!(range_months("2026/05", "2026-06").is_err()); // 書式
+    assert!(range_months("2020-01", "2026-01").is_err()); // 73ヶ月 > 60
+    assert!(range_months("2021-02", "2026-02").is_err()); // 60ヶ月ちょうどの1つ外
+    assert!(range_months("2021-03", "2026-02").unwrap().len() == 60);
+}
+
+#[test]
+fn category_report_zero_fills_and_ranks_by_period_total() {
+    let (conn, a, _b, expense, income) = seeded_db();
+    insert_tx(&conn, "2026-04-02", "expense", 300, a, None, Some(expense));
+    insert_tx(&conn, "2026-06-02", "expense", 700, a, None, Some(expense));
+    insert_tx(&conn, "2026-05-25", "income", 300_000, a, None, Some(income));
+
+    let report =
+        budget_tracker_lib::commands::reports::build_category_report(&conn, "2026-04", "2026-06")
+            .unwrap();
+
+    assert_eq!(report.months, vec!["2026-04", "2026-05", "2026-06"]);
+    // 期間合計の降順: 収入 300,000 が先、支出 1,000 が後。
+    assert_eq!(report.series.len(), 2);
+    assert_eq!(report.series[0].type_, "income");
+    assert_eq!(report.series[1].points, vec![300, 0, 700]);
+    assert_eq!(report.expense.len(), 1);
+    assert_eq!(report.expense[0].amount, 1_000);
+    assert_eq!(report.income[0].amount, 300_000);
+}
+
+#[test]
+fn net_worth_series_accumulates_from_the_opening_balance() {
+    let (conn, a, _b, expense, income) = seeded_db();
+    conn.execute(
+        "UPDATE accounts SET initial_balance = 10000 WHERE id = ?1",
+        rusqlite::params![a],
+    )
+    .unwrap();
+    insert_tx(&conn, "2026-03-31", "income", 5_000, a, None, Some(income));
+    insert_tx(&conn, "2026-04-10", "expense", 1_000, a, None, Some(expense));
+    insert_tx(&conn, "2026-06-10", "income", 2_000, a, None, Some(income));
+
+    let report = budget_tracker_lib::commands::reports::build_net_worth_report(
+        &conn, "2026-04", "2026-06",
+    )
+    .unwrap();
+
+    let worth: Vec<i64> = report.points.iter().map(|p| p.net_worth).collect();
+    // 開始 15,000 -> 4月 14,000 -> 5月 据え置き -> 6月 16,000
+    assert_eq!(worth, vec![14_000, 14_000, 16_000]);
+
+    let net: Vec<i64> = report.points.iter().map(|p| p.net).collect();
+    assert_eq!(net, vec![-1_000, 0, 2_000]);
+
+    // 窓が埋まるのは3点目から。(-1000 + 0 + 2000) / 3 = 333
+    let avg: Vec<Option<i64>> = report.points.iter().map(|p| p.net_moving_avg).collect();
+    assert_eq!(avg, vec![None, None, Some(333)]);
+}
+
+#[test]
+fn net_worth_series_ends_on_the_dashboard_total() {
+    use budget_tracker_lib::domain::balance::total_assets;
+    use budget_tracker_lib::infra::repo::balance_repo;
+
+    let (conn, a, b, expense, income) = seeded_db();
+    conn.execute(
+        "UPDATE accounts SET initial_balance = 50000 WHERE id IN (?1, ?2)",
+        rusqlite::params![a, b],
+    )
+    .unwrap();
+    insert_tx(&conn, "2026-04-10", "income", 8_000, a, None, Some(income));
+    insert_tx(&conn, "2026-05-10", "expense", 3_000, b, None, Some(expense));
+    insert_tx(&conn, "2026-05-11", "transfer", 7_000, a, Some(b), None);
+
+    let report = budget_tracker_lib::commands::reports::build_net_worth_report(
+        &conn, "2026-04", "2026-05",
+    )
+    .unwrap();
+    let rows = balance_repo::list_balances(&conn).unwrap();
+    let expected = total_assets(
+        rows.iter()
+            .map(|r| (r.archived_at.is_some(), r.balance)),
+    );
+
+    assert_eq!(report.points.last().unwrap().net_worth, expected);
+}

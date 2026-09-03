@@ -4,7 +4,7 @@ use tauri::State;
 
 use crate::commands::meta::AppState;
 use crate::domain::report::{
-    self, CategoryAggregate, Delta, MonthlyBucket, PeriodTotals,
+    self, CategoryAggregate, CategorySeries, Delta, MonthlyBucket, PeriodTotals,
 };
 use crate::domain::year_month::year_month_from_date;
 use crate::domain::YearMonth;
@@ -136,6 +136,33 @@ fn validate_month(month: u32) -> AppResult<()> {
     Ok(())
 }
 
+/// レンジの上限。既存 `monthly_series` の上限に揃える。
+pub const MAX_RANGE_MONTHS: u32 = 60;
+/// 移動平均の窓（spec §5.6）。
+pub const MOVING_AVERAGE_WINDOW: usize = 3;
+
+/// `"YYYY-MM"` の閉区間を月キーの並びに開く。書式・順序・長さをここで弾く。
+pub fn range_months(from_year_month: &str, to_year_month: &str) -> AppResult<Vec<String>> {
+    let start = YearMonth::parse_key(from_year_month)?;
+    let end = YearMonth::parse_key(to_year_month)?;
+    let span = end.months_since(start) + 1;
+    if span < 1 {
+        return Err(AppError::InvalidArgument(format!(
+            "range must not run backwards: {from_year_month}..{to_year_month}"
+        )));
+    }
+    if span > i64::from(MAX_RANGE_MONTHS) {
+        return Err(AppError::InvalidArgument(format!(
+            "range must be at most {MAX_RANGE_MONTHS} months, got {span}"
+        )));
+    }
+
+    let span = span as u32;
+    Ok((0..span)
+        .map(|offset| end.step_back(span - 1 - offset).key())
+        .collect())
+}
+
 #[tauri::command]
 pub fn report_monthly(
     state: State<'_, AppState>,
@@ -151,6 +178,113 @@ pub fn report_monthly(
 pub fn report_yearly(state: State<'_, AppState>, year: i32) -> AppResult<YearlyReport> {
     validate_year(year)?;
     state.with_conn(|conn| build_yearly_report(conn, year))
+}
+
+#[derive(Debug, Serialize)]
+pub struct CategoryReport {
+    /// 軸ラベル。`series[*].points` はこの並びと同じ長さ。
+    pub months: Vec<String>,
+    pub income: Vec<CategoryAggregate>,
+    pub expense: Vec<CategoryAggregate>,
+    pub series: Vec<CategorySeries>,
+}
+
+/// 期間内に取引のある全カテゴリを一度に返す。UI はクリックで表示を絞るだけで、
+/// 切り替えのたびに呼び直さない（spec §5.6）。
+pub fn build_category_report(
+    conn: &Connection,
+    from_year_month: &str,
+    to_year_month: &str,
+) -> AppResult<CategoryReport> {
+    let months = range_months(from_year_month, to_year_month)?;
+    let totals = report_repo::category_totals_between(conn, from_year_month, to_year_month)?;
+    let rows = report_repo::category_month_amounts(conn, from_year_month, to_year_month)?;
+
+    Ok(CategoryReport {
+        income: totals
+            .iter()
+            .filter(|a| a.type_ == "income")
+            .cloned()
+            .collect(),
+        expense: totals
+            .iter()
+            .filter(|a| a.type_ == "expense")
+            .cloned()
+            .collect(),
+        series: report::pivot_category_series(&rows, &months),
+        months,
+    })
+}
+
+#[derive(Debug, Serialize)]
+pub struct NetWorthPoint {
+    pub year_month: String,
+    /// 月末時点の純資産（振替の両脚を含む、非アーカイブ口座のみ）。
+    pub net_worth: i64,
+    /// その月の収支（振替は除外、規約3）。
+    pub net: i64,
+    /// `net` の3ヶ月移動平均。窓が埋まらない先頭2点は `None`。
+    pub net_moving_avg: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NetWorthReport {
+    pub points: Vec<NetWorthPoint>,
+}
+
+pub fn build_net_worth_report(
+    conn: &Connection,
+    from_year_month: &str,
+    to_year_month: &str,
+) -> AppResult<NetWorthReport> {
+    let months = range_months(from_year_month, to_year_month)?;
+    let opening = report_repo::opening_net_worth(conn, from_year_month)?;
+    let deltas = report_repo::monthly_net_worth_delta(conn, from_year_month, to_year_month)?;
+    let net_worth = report::accumulate_net_worth(opening, &report::align_to_months(&deltas, &months));
+
+    let buckets = report_repo::monthly_buckets_between(conn, from_year_month, to_year_month)?;
+    let nets: Vec<i64> = report::align_to_months(
+        &buckets
+            .iter()
+            .map(|b| (b.year_month.clone(), b.income.saturating_sub(b.expense)))
+            .collect::<Vec<_>>(),
+        &months,
+    );
+    let averages = report::moving_average(&nets, MOVING_AVERAGE_WINDOW);
+
+    let points = months
+        .into_iter()
+        .enumerate()
+        .map(|(i, year_month)| NetWorthPoint {
+            year_month,
+            net_worth: net_worth[i],
+            net: nets[i],
+            net_moving_avg: averages[i],
+        })
+        .collect();
+
+    Ok(NetWorthReport { points })
+}
+
+#[tauri::command]
+pub fn report_by_category(
+    state: State<'_, AppState>,
+    from_year_month: String,
+    to_year_month: String,
+) -> AppResult<CategoryReport> {
+    // 書式と長さは range_months が弾く。DB を開く前に検証しておく。
+    range_months(&from_year_month, &to_year_month)?;
+    state.with_conn(|conn| build_category_report(conn, &from_year_month, &to_year_month))
+}
+
+#[tauri::command]
+pub fn report_net_worth_series(
+    state: State<'_, AppState>,
+    from_year_month: String,
+    to_year_month: String,
+) -> AppResult<NetWorthReport> {
+    range_months(&from_year_month, &to_year_month)?;
+    state.with_conn(|conn| build_net_worth_report(conn, &from_year_month, &to_year_month))
 }
 
 #[cfg(test)]
