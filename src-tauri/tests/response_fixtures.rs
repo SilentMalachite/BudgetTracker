@@ -26,12 +26,16 @@ use budget_tracker_lib::commands::backup::ImportResult;
 use budget_tracker_lib::commands::balances::BalanceList;
 use budget_tracker_lib::commands::meta::AppInfo;
 use budget_tracker_lib::commands::recovery::{BootState, BootStatus};
+use budget_tracker_lib::commands::recurring::{
+    ExpansionResult, OccurrencePreview, RecurringRuleView, RuleExpansion, SkipReason, SkippedRule,
+};
 use budget_tracker_lib::commands::settings::BackupFileResult;
 use budget_tracker_lib::commands::transactions::ListTransactionResult;
 use budget_tracker_lib::domain::account::{Account, AccountKind};
 use budget_tracker_lib::domain::budget::BudgetStatus;
 use budget_tracker_lib::domain::category::{Category, CategoryType};
 use budget_tracker_lib::domain::ledger::{Transaction, TxType};
+use budget_tracker_lib::domain::recurring::{Frequency, RecurringRule};
 use budget_tracker_lib::domain::report::MonthlyBucket;
 use budget_tracker_lib::error::AppError;
 use budget_tracker_lib::infra::boot::RecoveryReason;
@@ -295,7 +299,7 @@ fn app_info() {
     check_fixture(
         "app_info",
         &AppInfo {
-            schema_version: 4,
+            schema_version: 5,
             db_path: SAMPLE_DB_PATH.into(),
         },
     );
@@ -453,5 +457,106 @@ fn app_error() {
     check_fixture(
         "app_error",
         &AppError::InvalidArgument("amount must be > 0".into()),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 定期取引 (Phase 5a)
+// ---------------------------------------------------------------------------
+
+fn sample_rent_rule() -> RecurringRule {
+    RecurringRule {
+        id: 1,
+        name: "家賃".into(),
+        type_: TxType::Expense,
+        amount: 85_000,
+        account_id: 1,
+        counter_account_id: None,
+        category_id: Some(1),
+        description: "毎月の家賃".into(),
+        frequency: Frequency::Monthly,
+        day_of_month: Some(27),
+        day_of_week: None,
+        starts_on: "2026-01-27".into(),
+        ends_on: None,
+        last_generated_on: Some("2026-06-27".into()),
+        active: true,
+    }
+}
+
+/// 停止中の週次振替。`counter_account_id` を持ち `category_id` を持たない側を
+/// フィクスチャに残しておくと、TS 側の null 許容が壊れたときに落ちる。
+fn sample_savings_rule() -> RecurringRule {
+    RecurringRule {
+        id: 2,
+        name: "週次の貯金".into(),
+        type_: TxType::Transfer,
+        amount: 5_000,
+        account_id: 2,
+        counter_account_id: Some(1),
+        category_id: None,
+        description: String::new(),
+        frequency: Frequency::Weekly,
+        day_of_month: None,
+        day_of_week: Some(1),
+        starts_on: "2026-01-05".into(),
+        ends_on: Some("2026-12-28".into()),
+        last_generated_on: None,
+        active: false,
+    }
+}
+
+#[test]
+fn list_recurring_rules() {
+    check_fixture(
+        "list_recurring_rules",
+        &vec![
+            RecurringRuleView {
+                rule: sample_rent_rule(),
+                next_occurrence: Some("2026-07-27".into()),
+            },
+            RecurringRuleView {
+                rule: sample_savings_rule(),
+                next_occurrence: None,
+            },
+        ],
+    );
+}
+
+#[test]
+fn expand_due_recurring() {
+    check_fixture(
+        "expand_due_recurring",
+        &ExpansionResult {
+            generated: 2,
+            rules: vec![RuleExpansion {
+                rule_id: 1,
+                rule_name: "家賃".into(),
+                generated: 2,
+                last_generated_on: "2026-06-27".into(),
+            }],
+            skipped: vec![SkippedRule {
+                rule_id: 2,
+                rule_name: "週次の貯金".into(),
+                reason: SkipReason::ArchivedCounterAccount,
+            }],
+        },
+    );
+}
+
+#[test]
+fn preview_recurring_occurrences() {
+    check_fixture(
+        "preview_recurring_occurrences",
+        &OccurrencePreview {
+            backfill: vec!["2026-01-27".into(), "2026-02-27".into()],
+            backfill_total: 2,
+            truncated: false,
+            upcoming: vec![
+                "2026-03-27".into(),
+                "2026-04-27".into(),
+                "2026-05-27".into(),
+            ],
+        },
     );
 }
