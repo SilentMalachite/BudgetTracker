@@ -10,20 +10,47 @@
   import TextField from '../lib/components/TextField.svelte';
   import {
     createRecurringRule,
+    expandDueRecurring,
     previewRecurringOccurrences,
     updateRecurringRule,
+    type ExpansionResult,
     type Frequency,
     type OccurrencePreview,
     type RecurringRuleInput,
     type RecurringRuleView,
+    type SkipReason,
   } from '../lib/api/recurring';
   import { createAccountsStore } from '../lib/stores/accounts.svelte';
   import { createCategoriesStore } from '../lib/stores/categories.svelte';
   import { createRecurringStore } from '../lib/stores/recurring.svelte';
 
+  /** 起動時展開の結果。どのルールがなぜ見送られたかを行に出すために受け取る。 */
+  let { expansion = null }: { expansion?: ExpansionResult | null } = $props();
+
   const rules = createRecurringStore();
   const accounts = createAccountsStore();
   const categories = createCategoriesStore();
+
+  const SKIP_REASON_LABELS: Record<SkipReason, string> = {
+    archived_account: '口座がアーカイブ済み',
+    archived_counter_account: '振替先口座がアーカイブ済み',
+    archived_category: 'カテゴリがアーカイブ済み',
+    category_type_mismatch: 'カテゴリの種別が合っていません',
+    malformed_rule: 'ルールの内容が壊れています',
+  };
+
+  /** この画面で走らせた展開の結果。あれば起動時のものより新しい。 */
+  let latestExpansion = $state<ExpansionResult | null>(null);
+
+  /** rule_id -> 見送り理由。バックエンドが返した一覧を引きやすく並べ替えるだけ。 */
+  const skipReasons = $derived.by(() => {
+    const source = latestExpansion ?? expansion;
+    const byRule = new Map<number, SkipReason>();
+    for (const skipped of source?.skipped ?? []) {
+      byRule.set(skipped.rule_id, skipped.reason);
+    }
+    return byRule;
+  });
 
   const FREQUENCY_OPTIONS = [
     { value: 'monthly', label: '毎月' },
@@ -130,8 +157,18 @@
     saving = true;
     formError = null;
     try {
-      if (form.id === null) await createRecurringRule(toInput());
-      else await updateRecurringRule(form.id, toInput());
+      if (form.id === null) {
+        await createRecurringRule(toInput());
+        // 保存前に見せた「今すぐ N 件生成されます」を本当にする。展開は冪等なので
+        // ここで走らせても起動時展開と二重にはならない。
+        try {
+          latestExpansion = await expandDueRecurring();
+        } catch {
+          // 展開の失敗で、すでに成功した保存を失敗扱いにしない。次回起動で再試行される。
+        }
+      } else {
+        await updateRecurringRule(form.id, toInput());
+      }
       open = false;
       await rules.load();
     } catch (e) {
@@ -190,7 +227,14 @@
             <td class="num">{view.rule.amount.toLocaleString('ja-JP')} 円</td>
             <td>{FREQUENCY_OPTIONS.find((o) => o.value === view.rule.frequency)?.label}</td>
             <td data-testid="recurring-next">{view.next_occurrence ?? '—'}</td>
-            <td>{view.rule.active ? '有効' : '停止中'}</td>
+            <td>
+              {view.rule.active ? '有効' : '停止中'}
+              {#if skipReasons.has(view.rule.id)}
+                <span class="skip-badge" data-testid="recurring-skip-badge">
+                  見送り: {SKIP_REASON_LABELS[skipReasons.get(view.rule.id)!]}
+                </span>
+              {/if}
+            </td>
             <td class="row-actions">
               <Button variant="ghost" onclick={() => openEdit(view)}>編集</Button>
               <Button
@@ -247,6 +291,12 @@
   {:else}
     <TextField label="発生日 (1-31)" type="number" bind:value={form.day_of_month} required testid="recurring-day-of-month" />
     <p class="hint">31 を選ぶと、31 日が無い月はその月の末日になります。</p>
+  {/if}
+
+  {#if form.id !== null}
+    <p class="hint" data-testid="recurring-edit-caveat">
+      周期や発生日を変えると、今の期間にもう 1 件生成されることがあります。
+    </p>
   {/if}
 
   <TextField label="開始日" type="date" bind:value={form.starts_on} required testid="recurring-starts-on" />
@@ -319,5 +369,15 @@
 
   .preview {
     margin-top: var(--space-4);
+  }
+
+  .skip-badge {
+    display: inline-block;
+    margin-left: var(--space-2);
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-md);
+    background: rgba(255, 170, 0, 0.22);
+    font-size: 0.8rem;
+    white-space: nowrap;
   }
 </style>
