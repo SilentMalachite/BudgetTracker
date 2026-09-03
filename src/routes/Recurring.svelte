@@ -23,6 +23,7 @@
   import { createAccountsStore } from '../lib/stores/accounts.svelte';
   import { createCategoriesStore } from '../lib/stores/categories.svelte';
   import { createRecurringStore } from '../lib/stores/recurring.svelte';
+  import { isoToday } from '../lib/utils/yearMonth';
 
   /** 起動時展開の結果。どのルールがなぜ見送られたかを行に出すために受け取る。 */
   let { expansion = null }: { expansion?: ExpansionResult | null } = $props();
@@ -82,7 +83,7 @@
       frequency: 'monthly' as Frequency,
       day_of_month: '1',
       day_of_week: '1',
-      starts_on: new Date().toISOString().slice(0, 10),
+      starts_on: isoToday(),
       ends_on: '',
     };
   }
