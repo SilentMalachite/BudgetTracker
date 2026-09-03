@@ -9,6 +9,7 @@
   import Settings from './routes/Settings.svelte';
   import Recovery from './routes/Recovery.svelte';
   import Recurring from './routes/Recurring.svelte';
+  import Reports from './routes/Reports.svelte';
   import { bootStatus, type BootStatus } from './lib/api/boot';
   import { recurringExpansion } from './lib/stores/recurringExpansion.svelte';
 
@@ -17,6 +18,7 @@
     '/transactions',
     '/categories',
     '/budgets',
+    '/reports',
     '/recurring',
     '/accounts',
     '/settings',
@@ -104,6 +106,8 @@
         <Categories />
       {:else if currentPath === '/budgets'}
         <Budgets />
+      {:else if currentPath === '/reports'}
+        <Reports />
       {:else if currentPath === '/recurring'}
         <Recurring />
       {:else if currentPath === '/accounts'}
