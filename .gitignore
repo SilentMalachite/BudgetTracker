@@ -43,3 +43,6 @@ test-results/
 
 # Worktrees (superpowers workflow)
 .worktrees/
+
+# Superpowers SDD scratch
+.superpowers/
