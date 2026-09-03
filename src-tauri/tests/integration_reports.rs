@@ -227,3 +227,108 @@ fn monthly_buckets_since_returns_sorted_groups() {
     assert_eq!(buckets[2].income, 300);
     assert_eq!(buckets[2].expense, 50);
 }
+
+#[test]
+fn buckets_between_bounds_both_ends_and_excludes_transfers() {
+    let (conn, a, b, expense, income) = seeded_db();
+    insert_tx(&conn, "2026-03-31", "expense", 100, a, None, Some(expense));
+    insert_tx(&conn, "2026-04-01", "expense", 200, a, None, Some(expense));
+    insert_tx(&conn, "2026-04-30", "income", 900, a, None, Some(income));
+    insert_tx(&conn, "2026-05-31", "expense", 400, a, None, Some(expense));
+    insert_tx(&conn, "2026-06-01", "expense", 800, a, None, Some(expense));
+    // 振替は収入にも支出にも数えない (規約3)。
+    insert_tx(&conn, "2026-04-15", "transfer", 5_000, a, Some(b), None);
+
+    let buckets = report_repo::monthly_buckets_between(&conn, "2026-04", "2026-05").unwrap();
+
+    assert_eq!(buckets.len(), 2);
+    assert_eq!(buckets[0].year_month, "2026-04");
+    assert_eq!(buckets[0].income, 900);
+    assert_eq!(buckets[0].expense, 200);
+    assert_eq!(buckets[1].year_month, "2026-05");
+    assert_eq!(buckets[1].expense, 400);
+}
+
+#[test]
+fn category_totals_are_ordered_by_amount_desc() {
+    let (conn, a, _b, expense, income) = seeded_db();
+    insert_tx(&conn, "2026-04-02", "expense", 300, a, None, Some(expense));
+    insert_tx(&conn, "2026-05-02", "expense", 400, a, None, Some(expense));
+    insert_tx(&conn, "2026-04-25", "income", 10_000, a, None, Some(income));
+
+    let totals = report_repo::category_totals_between(&conn, "2026-04", "2026-05").unwrap();
+
+    assert_eq!(totals.len(), 2);
+    assert_eq!(totals[0].type_, "income");
+    assert_eq!(totals[0].amount, 10_000);
+    assert_eq!(totals[1].type_, "expense");
+    assert_eq!(totals[1].amount, 700);
+}
+
+#[test]
+fn category_month_amounts_split_by_month() {
+    let (conn, a, _b, expense, _income) = seeded_db();
+    insert_tx(&conn, "2026-04-02", "expense", 300, a, None, Some(expense));
+    insert_tx(&conn, "2026-04-20", "expense", 200, a, None, Some(expense));
+    insert_tx(&conn, "2026-05-02", "expense", 400, a, None, Some(expense));
+
+    let rows = report_repo::category_month_amounts(&conn, "2026-04", "2026-05").unwrap();
+
+    assert_eq!(rows.len(), 2);
+    assert_eq!((rows[0].year_month.as_str(), rows[0].amount), ("2026-04", 500));
+    assert_eq!((rows[1].year_month.as_str(), rows[1].amount), ("2026-05", 400));
+    assert_eq!(rows[0].type_, "expense");
+}
+
+#[test]
+fn net_worth_delta_counts_both_legs_of_a_transfer() {
+    let (conn, a, b, expense, income) = seeded_db();
+    insert_tx(&conn, "2026-04-05", "income", 1_000, a, None, Some(income));
+    insert_tx(&conn, "2026-04-06", "expense", 400, a, None, Some(expense));
+    // 両口座とも非アーカイブなので、振替は出金と入金で相殺されて 0 になる。
+    insert_tx(&conn, "2026-04-07", "transfer", 5_000, a, Some(b), None);
+
+    let deltas = report_repo::monthly_net_worth_delta(&conn, "2026-04", "2026-04").unwrap();
+
+    assert_eq!(deltas, vec![("2026-04".to_string(), 600)]);
+}
+
+#[test]
+fn net_worth_delta_drops_the_leg_that_lands_in_an_archived_account() {
+    let (conn, a, b, _expense, _income) = seeded_db();
+    insert_tx(&conn, "2026-04-07", "transfer", 5_000, a, Some(b), None);
+    conn.execute("UPDATE accounts SET archived_at = ?1 WHERE id = ?2", rusqlite::params![NOW, b])
+        .unwrap();
+
+    let deltas = report_repo::monthly_net_worth_delta(&conn, "2026-04", "2026-04").unwrap();
+
+    // 受け側が隠れた分、送金の -5000 だけが残る。
+    assert_eq!(deltas, vec![("2026-04".to_string(), -5_000)]);
+}
+
+#[test]
+fn opening_net_worth_sums_initial_balances_and_everything_before_the_window() {
+    let (conn, a, _b, expense, income) = seeded_db();
+    conn.execute("UPDATE accounts SET initial_balance = 10000 WHERE id = ?1", rusqlite::params![a])
+        .unwrap();
+    insert_tx(&conn, "2026-03-31", "income", 2_000, a, None, Some(income));
+    // ウィンドウ内なので開始残高には入らない。
+    insert_tx(&conn, "2026-04-01", "expense", 500, a, None, Some(expense));
+
+    assert_eq!(report_repo::opening_net_worth(&conn, "2026-04").unwrap(), 12_000);
+}
+
+#[test]
+fn opening_net_worth_ignores_archived_accounts() {
+    let (conn, a, b, _expense, income) = seeded_db();
+    conn.execute(
+        "UPDATE accounts SET initial_balance = 10000 WHERE id IN (?1, ?2)",
+        rusqlite::params![a, b],
+    )
+    .unwrap();
+    insert_tx(&conn, "2026-01-10", "income", 3_000, b, None, Some(income));
+    conn.execute("UPDATE accounts SET archived_at = ?1 WHERE id = ?2", rusqlite::params![NOW, b])
+        .unwrap();
+
+    assert_eq!(report_repo::opening_net_worth(&conn, "2026-04").unwrap(), 10_000);
+}
