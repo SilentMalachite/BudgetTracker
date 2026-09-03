@@ -29,6 +29,7 @@ use budget_tracker_lib::commands::recovery::{BootState, BootStatus};
 use budget_tracker_lib::commands::recurring::{
     ExpansionResult, OccurrencePreview, RecurringRuleView, RuleExpansion, SkipReason, SkippedRule,
 };
+use budget_tracker_lib::commands::reports::{MonthlyReport, YearlyReport};
 use budget_tracker_lib::commands::settings::BackupFileResult;
 use budget_tracker_lib::commands::transactions::ListTransactionResult;
 use budget_tracker_lib::domain::account::{Account, AccountKind};
@@ -36,7 +37,7 @@ use budget_tracker_lib::domain::budget::BudgetStatus;
 use budget_tracker_lib::domain::category::{Category, CategoryType};
 use budget_tracker_lib::domain::ledger::{Transaction, TxType};
 use budget_tracker_lib::domain::recurring::{Frequency, RecurringRule};
-use budget_tracker_lib::domain::report::MonthlyBucket;
+use budget_tracker_lib::domain::report::{Delta, MonthlyBucket, PeriodTotals};
 use budget_tracker_lib::error::AppError;
 use budget_tracker_lib::infra::boot::RecoveryReason;
 use budget_tracker_lib::infra::repo::balance_repo::AccountBalance;
@@ -389,6 +390,67 @@ fn monthly_series() {
                 expense: 1_280,
             },
         ],
+    );
+}
+
+#[test]
+fn report_monthly() {
+    check_fixture(
+        "report_monthly",
+        &MonthlyReport {
+            current: PeriodTotals::new(320_000, 148_600),
+            prev_month: PeriodTotals::new(320_000, 132_400),
+            prev_year: PeriodTotals::new(300_000, 0),
+            mom: Delta {
+                income_diff: 0,
+                expense_diff: 16_200,
+                net_diff: -16_200,
+                expense_percent: Some(12),
+            },
+            yoy: Delta {
+                income_diff: 20_000,
+                expense_diff: 148_600,
+                net_diff: -128_600,
+                // 前年同月の支出が 0 なので割合は出さない。
+                expense_percent: None,
+            },
+            top_expense: vec![CategoryAggregate {
+                category_id: 1,
+                name: "食費".into(),
+                type_: "expense".into(),
+                amount: 148_600,
+            }],
+            top_income: vec![CategoryAggregate {
+                category_id: 2,
+                name: "給与".into(),
+                type_: "income".into(),
+                amount: 320_000,
+            }],
+        },
+    );
+}
+
+#[test]
+fn report_yearly() {
+    let months = (1..=12)
+        .map(|month| MonthlyBucket {
+            year_month: format!("2026-{month:02}"),
+            income: 320_000,
+            expense: if month == 5 { 148_600 } else { 120_000 },
+        })
+        .collect::<Vec<_>>();
+    check_fixture(
+        "report_yearly",
+        &YearlyReport {
+            year: 2026,
+            months,
+            total_income: 3_840_000,
+            total_expense: 1_468_600,
+            net: 2_371_400,
+            avg_income: 320_000,
+            avg_expense: 122_383,
+            max_expense_month: Some("2026-05".into()),
+        },
     );
 }
 

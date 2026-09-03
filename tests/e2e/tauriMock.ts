@@ -12,6 +12,25 @@ const readyBootResults: Record<string, unknown> = {
   list_accounts: [],
   list_recurring_rules: [],
   expand_due_recurring: { generated: 0, rules: [], skipped: [] },
+  report_monthly: {
+    current: { income: 0, expense: 0, net: 0 },
+    prev_month: { income: 0, expense: 0, net: 0 },
+    prev_year: { income: 0, expense: 0, net: 0 },
+    mom: { income_diff: 0, expense_diff: 0, net_diff: 0, expense_percent: null },
+    yoy: { income_diff: 0, expense_diff: 0, net_diff: 0, expense_percent: null },
+    top_expense: [],
+    top_income: [],
+  },
+  report_yearly: {
+    year: new Date().getFullYear(),
+    months: [],
+    total_income: 0,
+    total_expense: 0,
+    net: 0,
+    avg_income: 0,
+    avg_expense: 0,
+    max_expense_month: null,
+  },
 };
 
 export function readyBootResult(command: string): unknown {

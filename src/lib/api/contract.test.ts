@@ -24,7 +24,7 @@ import type { BootStatus, RecoveryReason } from './boot';
 import type { BudgetStatus } from './budgets';
 import type { Category, CategoryType } from './categories';
 import type { AppInfo } from './index';
-import type { MonthlyBucket, MonthlySummary } from './reports';
+import type { MonthlyBucket, MonthlyReport, MonthlySummary, YearlyReport } from './reports';
 import type {
   ExpansionResult,
   Frequency,
@@ -51,6 +51,8 @@ import listTransactions from '../../../tests/fixtures/responses/list_transaction
 import monthlySeries from '../../../tests/fixtures/responses/monthly_series.json';
 import monthlySummary from '../../../tests/fixtures/responses/monthly_summary.json';
 import previewRecurringOccurrences from '../../../tests/fixtures/responses/preview_recurring_occurrences.json';
+import reportMonthly from '../../../tests/fixtures/responses/report_monthly.json';
+import reportYearly from '../../../tests/fixtures/responses/report_yearly.json';
 
 // ---------------------------------------------------------------------------
 // Compile-time helpers (no runtime effect)
@@ -147,6 +149,8 @@ const COVERED_FIXTURES = [
   'monthly_series.json',
   'monthly_summary.json',
   'preview_recurring_occurrences.json',
+  'report_monthly.json',
+  'report_yearly.json',
 ];
 
 describe('Rust response fixtures match the TypeScript API types', () => {
@@ -196,6 +200,24 @@ describe('Rust response fixtures match the TypeScript API types', () => {
     typeCovers<typeof monthlySeries>(shapeOf<MonthlyBucket[]>());
 
     expect(monthlySeries.length).toBeGreaterThan(0);
+  });
+
+  it('report_monthly is a MonthlyReport', () => {
+    fixtureFits<MonthlyReport>(reportMonthly);
+    typeCovers<typeof reportMonthly>(shapeOf<MonthlyReport>());
+
+    // 比較対象が 0 のとき割合は null になる（0 除算をフロントに出さない）。
+    expect(reportMonthly.yoy.expense_percent).toBeNull();
+    for (const aggregate of [...reportMonthly.top_expense, ...reportMonthly.top_income]) {
+      expect(CATEGORY_TYPES).toContain(aggregate.type);
+    }
+  });
+
+  it('report_yearly is a YearlyReport with twelve months', () => {
+    fixtureFits<YearlyReport>(reportYearly);
+    typeCovers<typeof reportYearly>(shapeOf<YearlyReport>());
+
+    expect(reportYearly.months).toHaveLength(12);
   });
 
   it('list_transactions is a ListTransactionResult', () => {
