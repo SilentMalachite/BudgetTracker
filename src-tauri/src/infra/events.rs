@@ -9,6 +9,7 @@ pub enum ChangedDomain {
     Accounts,
     Transactions,
     Budgets,
+    Recurring,
     Meta,
 }
 
