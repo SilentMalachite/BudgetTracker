@@ -30,6 +30,7 @@ vi.mock('chart.js', () => {
     LineController: class {},
     LineElement: class {},
     LinearScale: class {},
+    PieController: class {},
     PointElement: class {},
     Tooltip: class {},
   };
@@ -45,13 +46,55 @@ describe('Chart.svelte', () => {
   });
 
   it('builds the chart once with the given data', () => {
+    const data = { labels: ['a'], datasets: [{ label: 'x', data: [1] }] };
+    const options = { responsive: true };
+
     render(Chart, {
+      props: {
+        type: 'bar' as const,
+        data,
+        options,
+        ariaLabel: 'テスト',
+      },
+    });
+
+    expect(construct).toHaveBeenCalledTimes(1);
+    const [config] = construct.mock.calls[0];
+    expect(config.type).toBe('bar');
+    expect(config.data).toEqual(data);
+    expect(config.options).toEqual(options);
+  });
+
+  it('does not call update on mount, but calls it once when data changes', async () => {
+    const { rerender } = render(Chart, {
       props: {
         type: 'bar' as const,
         data: { labels: ['a'], datasets: [{ label: 'x', data: [1] }] },
         ariaLabel: 'テスト',
       },
     });
+
+    expect(update).toHaveBeenCalledTimes(0);
+
+    await rerender({
+      data: { labels: ['a', 'b'], datasets: [{ label: 'x', data: [1, 2] }] },
+    });
+
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not rebuild the chart when type changes after mount', async () => {
+    const { rerender } = render(Chart, {
+      props: {
+        type: 'bar' as const,
+        data: { labels: [], datasets: [] },
+        ariaLabel: 'テスト',
+      },
+    });
+
+    expect(construct).toHaveBeenCalledTimes(1);
+
+    await rerender({ type: 'line' as const });
 
     expect(construct).toHaveBeenCalledTimes(1);
   });

@@ -12,6 +12,7 @@
     LineController,
     LineElement,
     LinearScale,
+    PieController,
     PointElement,
     Tooltip,
   } from 'chart.js';
@@ -29,6 +30,7 @@
     LineController,
     LineElement,
     LinearScale,
+    PieController,
     PointElement,
     Tooltip,
   );
@@ -50,10 +52,16 @@
 
   let canvas = $state<HTMLCanvasElement | null>(null);
   let chart: ChartJS | null = null;
+  // onMount と $effect の初回実行は同じマウントの中で両方走る (Svelte はどちらも
+  // 同じ component_context.e に積んで宣言順に flush するため、onMount が先に
+  // 必ず終わる)。このフラグで $effect の「初回だけ」を無視し、生成直後の
+  // 冗長な chart.update() を防ぐ。
+  let justCreated = false;
 
   onMount(() => {
     if (!canvas) return;
     chart = new ChartJS(canvas, { type, data, options });
+    justCreated = true;
   });
 
   $effect(() => {
@@ -61,6 +69,11 @@
     const nextData = data;
     const nextOptions = options;
     if (!chart) return;
+    if (justCreated) {
+      // onMount が今まさにこのデータで生成したばかり。反映済みなので何もしない。
+      justCreated = false;
+      return;
+    }
     chart.data = nextData;
     if (nextOptions) chart.options = nextOptions;
     chart.update();
