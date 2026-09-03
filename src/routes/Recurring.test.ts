@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const listRecurringRulesMock = vi.fn();
@@ -26,9 +26,31 @@ vi.mock('../lib/api/events', () => ({
   onDataChanged: async () => () => {},
 }));
 
+import { recurringExpansion } from '../lib/stores/recurringExpansion.svelte';
 import Recurring from './Recurring.svelte';
 
 const ORIGINAL_TZ = process.env.TZ;
+
+const view = {
+  rule: {
+    id: 1,
+    name: '家賃',
+    type: 'expense',
+    amount: 85_000,
+    account_id: 1,
+    counter_account_id: null,
+    category_id: 1,
+    description: '',
+    frequency: 'monthly',
+    day_of_month: 27,
+    day_of_week: null,
+    starts_on: '2026-01-27',
+    ends_on: null,
+    last_generated_on: null,
+    active: true,
+  },
+  next_occurrence: '2026-02-27',
+};
 
 describe('Recurring', () => {
   beforeAll(() => {
@@ -68,5 +90,39 @@ describe('Recurring', () => {
 
     const startsOn = screen.getByTestId('recurring-starts-on') as HTMLInputElement;
     expect(startsOn.value).toBe('2026-09-04');
+  });
+
+  it('badges a skipped rule from the shared expansion result', async () => {
+    listRecurringRulesMock.mockResolvedValue([view]);
+    expandDueRecurringMock.mockResolvedValueOnce({
+      generated: 0,
+      rules: [],
+      skipped: [{ rule_id: 1, rule_name: '家賃', reason: 'archived_account' }],
+    });
+    // 起動時展開に相当。App が書き込んだ結果を、この画面がそのまま読む。
+    await recurringExpansion.run();
+
+    render(Recurring);
+
+    const badge = await screen.findByTestId('recurring-skip-badge');
+    expect(badge.textContent).toContain('口座がアーカイブ済み');
+  });
+
+  it('surfaces a failed expansion and retries it from this screen', async () => {
+    expandDueRecurringMock.mockRejectedValueOnce(new Error('database is locked'));
+    // 起動時展開が失敗した状態。App は開いたまま、失敗はストアに残る。
+    await recurringExpansion.run();
+
+    render(Recurring);
+
+    const banner = screen.getByTestId('recurring-expansion-error');
+    expect(banner.textContent).toContain('database is locked');
+
+    await fireEvent.click(screen.getByTestId('recurring-expansion-retry'));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('recurring-expansion-error')).toBeNull();
+    });
+    expect(expandDueRecurringMock).toHaveBeenCalledTimes(2);
   });
 });

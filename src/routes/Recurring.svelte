@@ -10,10 +10,8 @@
   import TextField from '../lib/components/TextField.svelte';
   import {
     createRecurringRule,
-    expandDueRecurring,
     previewRecurringOccurrences,
     updateRecurringRule,
-    type ExpansionResult,
     type Frequency,
     type OccurrencePreview,
     type RecurringRuleInput,
@@ -23,10 +21,8 @@
   import { createAccountsStore } from '../lib/stores/accounts.svelte';
   import { createCategoriesStore } from '../lib/stores/categories.svelte';
   import { createRecurringStore } from '../lib/stores/recurring.svelte';
+  import { recurringExpansion } from '../lib/stores/recurringExpansion.svelte';
   import { isoToday } from '../lib/utils/yearMonth';
-
-  /** 起動時展開の結果。どのルールがなぜ見送られたかを行に出すために受け取る。 */
-  let { expansion = null }: { expansion?: ExpansionResult | null } = $props();
 
   const rules = createRecurringStore();
   const accounts = createAccountsStore();
@@ -40,14 +36,14 @@
     malformed_rule: 'ルールの内容が壊れています',
   };
 
-  /** この画面で走らせた展開の結果。あれば起動時のものより新しい。 */
-  let latestExpansion = $state<ExpansionResult | null>(null);
-
-  /** rule_id -> 見送り理由。バックエンドが返した一覧を引きやすく並べ替えるだけ。 */
+  /**
+   * rule_id -> 見送り理由。バックエンドが返した一覧を引きやすく並べ替えるだけ。
+   * 起動時展開もこの画面から走らせた展開も同じストアに入るので、行のバッジと
+   * アプリシェルのバナーが食い違うことはない。
+   */
   const skipReasons = $derived.by(() => {
-    const source = latestExpansion ?? expansion;
     const byRule = new Map<number, SkipReason>();
-    for (const skipped of source?.skipped ?? []) {
+    for (const skipped of recurringExpansion.result?.skipped ?? []) {
       byRule.set(skipped.rule_id, skipped.reason);
     }
     return byRule;
@@ -164,12 +160,9 @@
       // 新規なら、保存前に見せた「今すぐ N 件生成されます」を本当にする。編集なら、
       // 参照先を直したルールの見送りバッジをその場で消す (直したのに「壊れている」と
       // 出したままにしない) 上に、直った結果として生成されるべき分をここで生成する。
-      // 展開は冪等なので起動時展開と二重にはならない。
-      try {
-        latestExpansion = await expandDueRecurring();
-      } catch {
-        // 展開の失敗で、すでに成功した保存を失敗扱いにしない。次回起動で再試行される。
-      }
+      // 展開は冪等なので起動時展開と二重にはならない。run() は失敗しても throw せず、
+      // すでに成功した保存を失敗扱いにしない (失敗は下の再試行バナーに出る)。
+      await recurringExpansion.run();
       open = false;
       await rules.load();
     } catch (e) {
@@ -177,6 +170,11 @@
     } finally {
       saving = false;
     }
+  }
+
+  /** 失敗した展開をやり直す。起動時展開が失敗したままだと取引が 1 件も生成されない。 */
+  async function retryExpansion() {
+    if (await recurringExpansion.run()) await rules.load();
   }
 
   onDestroy(() => {
@@ -204,6 +202,20 @@
 
 {#if rules.error}
   <ErrorBanner message={rules.error} />
+{/if}
+
+{#if recurringExpansion.error}
+  <div class="expansion-error" role="alert" data-testid="recurring-expansion-error">
+    <span>定期取引の展開に失敗しました: {recurringExpansion.error}</span>
+    <Button
+      variant="ghost"
+      onclick={retryExpansion}
+      disabled={recurringExpansion.running}
+      testid="recurring-expansion-retry"
+    >
+      再試行
+    </Button>
+  </div>
 {/if}
 
 <Card>
@@ -370,6 +382,17 @@
 
   .preview {
     margin-top: var(--space-4);
+  }
+
+  .expansion-error {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    margin-bottom: var(--space-4);
+    border-radius: var(--radius-md);
+    background: rgba(255, 71, 87, 0.22);
   }
 
   .skip-badge {
