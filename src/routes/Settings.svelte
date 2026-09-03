@@ -5,8 +5,11 @@
   import {
     exportBackupToFile,
     importJson,
+    listPreImportSnapshots,
+    restorePreImportSnapshot,
     type ImportMode,
-    type ImportResult
+    type ImportResult,
+    type PreImportSnapshot
   } from '../lib/api/backup';
   import { getDbPath, getLastBackupAt } from '../lib/api/settings';
 
@@ -17,6 +20,7 @@
   let mode = $state<ImportMode>('append');
   let warnings = $state<string[]>([]);
   let importStats = $state<ImportResult | null>(null);
+  let snapshots = $state<PreImportSnapshot[]>([]);
 
   onMount(() => {
     void (async () => {
@@ -28,7 +32,58 @@
         message = `設定情報の読み込みに失敗しました: ${e instanceof Error ? e.message : String(e)}`;
       }
     })();
+    void loadSnapshots();
   });
+
+  /**
+   * Safety copies taken before overwrite imports. When the list cannot be
+   * read (no Tauri runtime, or an I/O error) the section simply stays hidden.
+   */
+  async function loadSnapshots() {
+    try {
+      const list = await listPreImportSnapshots();
+      snapshots = Array.isArray(list) ? list : [];
+    } catch {
+      snapshots = [];
+    }
+  }
+
+  function formatCreatedAt(iso: string): string {
+    const date = new Date(iso);
+    return Number.isNaN(date.getTime()) ? iso : date.toLocaleString('ja-JP');
+  }
+
+  function formatSize(bytes: number): string {
+    if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+    return `${bytes} B`;
+  }
+
+  async function doRestore(snapshot: PreImportSnapshot) {
+    const takenAt = formatCreatedAt(snapshot.created_at);
+    if (
+      !confirm(
+        `${takenAt} 時点 (取り込み前) のデータに戻します。現在のデータは削除されず data.db.replaced-… として残ります。続行しますか?`
+      )
+    ) {
+      return;
+    }
+
+    busy = true;
+    message = null;
+    importStats = null;
+    warnings = [];
+    try {
+      await restorePreImportSnapshot(snapshot.file_name);
+      message = `${takenAt} 時点のデータに戻しました`;
+      lastBackup = await getLastBackupAt();
+      await loadSnapshots();
+    } catch (e) {
+      message = `復元失敗: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      busy = false;
+    }
+  }
 
   async function doExport() {
     busy = true;
@@ -60,7 +115,12 @@
       input.value = '';
       return;
     }
-    if (mode === 'overwrite' && !confirm('現在のデータをすべて置き換えます。続行しますか?')) {
+    if (
+      mode === 'overwrite' &&
+      !confirm(
+        '現在のデータをすべて置き換えます。取り込み前のデータは安全のためコピーを保存し、この画面の「取り込み前のデータに戻す」から戻せます。続行しますか?'
+      )
+    ) {
       input.value = '';
       return;
     }
@@ -75,6 +135,9 @@
       warnings = result.warnings;
       message = `読み込み完了: カテゴリ ${result.categories} / 口座 ${result.accounts} / 取引 ${result.transactions} / 予算 ${result.budgets}`;
       lastBackup = await getLastBackupAt();
+      if (mode === 'overwrite') {
+        await loadSnapshots();
+      }
     } catch (e) {
       message = `インポート失敗: ${e instanceof Error ? e.message : String(e)}`;
     } finally {
@@ -153,6 +216,31 @@
       {/if}
     {/snippet}
   </Card>
+
+  {#if snapshots.length > 0}
+    <Card>
+      {#snippet children()}
+        <h2>取り込み前のデータに戻す</h2>
+        <p>
+          上書きインポートの直前に保存した安全コピーです (最新 3
+          件)。戻しても現在のデータは削除されず、data.db.replaced-… として残ります。
+        </p>
+        <ul class="snapshots" data-testid="settings-snapshots">
+          {#each snapshots as snapshot (snapshot.file_name)}
+            <li>
+              <div class="snapshot-meta">
+                <time datetime={snapshot.created_at}>{formatCreatedAt(snapshot.created_at)}</time>
+                <span class="snapshot-size">{formatSize(snapshot.size_bytes)}</span>
+              </div>
+              <Button variant="ghost" disabled={busy} onclick={() => doRestore(snapshot)}>
+                {#snippet children()}この時点に戻す{/snippet}
+              </Button>
+            </li>
+          {/each}
+        </ul>
+      {/snippet}
+    </Card>
+  {/if}
 </section>
 
 <style>
@@ -211,6 +299,33 @@
     border-radius: var(--radius-sm);
     background: rgba(0, 0, 0, 0.04);
     padding: var(--space-3);
+  }
+
+  .snapshots {
+    display: grid;
+    gap: var(--space-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .snapshots li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  .snapshot-meta {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+  }
+
+  .snapshot-size {
+    color: var(--muted);
+    font-size: 0.9em;
   }
 
   @media (max-width: 720px) {

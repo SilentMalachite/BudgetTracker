@@ -70,6 +70,8 @@ pub fn run() {
             commands::settings::get_last_backup_at,
             commands::settings::export_backup_to_file,
             commands::settings::get_db_path,
+            commands::snapshots::list_pre_import_snapshots,
+            commands::snapshots::restore_pre_import_snapshot,
             commands::balances::list_balances,
         ])
         .run(tauri::generate_context!())

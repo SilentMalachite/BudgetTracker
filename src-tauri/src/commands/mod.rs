@@ -7,4 +7,5 @@ pub mod meta;
 pub mod recovery;
 pub mod reports;
 pub mod settings;
+pub mod snapshots;
 pub mod transactions;

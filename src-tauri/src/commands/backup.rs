@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 
 use chrono::Datelike;
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
@@ -7,6 +8,7 @@ use serde_json::json;
 use tauri::{AppHandle, State};
 
 use crate::commands::meta::AppState;
+use crate::commands::snapshots;
 use crate::domain::account::{self, AccountKind};
 use crate::domain::budget::{self, RawSetBudgetInput};
 use crate::domain::category::{self, Category, CategoryType};
@@ -1009,11 +1011,8 @@ fn collect_import_errors(snap: &Snapshot) -> Vec<ImportRowError> {
     errors
 }
 
-pub fn import_snapshot_json(
-    conn: &mut rusqlite::Connection,
-    payload: &str,
-    mode: &str,
-) -> AppResult<ImportResult> {
+/// Parse and validate a backup payload without touching the database.
+fn parse_snapshot(payload: &str, mode: &str) -> AppResult<(Snapshot, ImportMode)> {
     if payload.len() > MAX_PAYLOAD_BYTES {
         return Err(AppError::InvalidArgument(format!(
             "payload exceeds {MAX_PAYLOAD_BYTES} bytes"
@@ -1035,7 +1034,59 @@ pub fn import_snapshot_json(
             &errors,
         )));
     }
+    Ok((snap, mode))
+}
 
+pub fn import_snapshot_json(
+    conn: &mut rusqlite::Connection,
+    payload: &str,
+    mode: &str,
+) -> AppResult<ImportResult> {
+    let (snap, mode) = parse_snapshot(payload, mode)?;
+    apply_snapshot(conn, &snap, mode)
+}
+
+/// Same as [`import_snapshot_json`], but an overwrite first copies the live
+/// database to `data.db.pre-import-<stamp>` so a wrong or stale file can be
+/// undone with `restore_pre_import_snapshot`. Validation runs before the copy
+/// so a rejected payload costs nothing; a failure inside the import
+/// transaction rolls back and discards the copy, since the live data is
+/// intact. Older copies are pruned only after the import committed.
+pub fn import_snapshot_json_guarded(
+    conn: &mut rusqlite::Connection,
+    db_path: &Path,
+    payload: &str,
+    mode: &str,
+) -> AppResult<ImportResult> {
+    let (snap, mode) = parse_snapshot(payload, mode)?;
+    if mode != ImportMode::Overwrite {
+        return apply_snapshot(conn, &snap, mode);
+    }
+    let data_dir = snapshots::data_dir_of(db_path)?;
+    let copy = snapshots::write_pre_import_snapshot(conn, &data_dir, chrono::Utc::now())?;
+    match apply_snapshot(conn, &snap, mode) {
+        Ok(result) => {
+            // The import is committed; a pruning hiccup must not report it as failed.
+            if let Err(err) =
+                snapshots::prune_pre_import_snapshots(&data_dir, snapshots::KEEP_NEWEST)
+            {
+                eprintln!("[backup] failed to prune pre-import snapshots: {err}");
+            }
+            Ok(result)
+        }
+        Err(err) => {
+            let _ = std::fs::remove_file(&copy);
+            Err(err)
+        }
+    }
+}
+
+/// Apply a validated snapshot inside one immediate transaction.
+fn apply_snapshot(
+    conn: &mut rusqlite::Connection,
+    snap: &Snapshot,
+    mode: ImportMode,
+) -> AppResult<ImportResult> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let mut warnings = Vec::new();
     let mut category_count = 0u32;
@@ -1137,8 +1188,13 @@ pub fn import_json(
     state: State<'_, AppState>,
     args: ImportArgs,
 ) -> AppResult<ImportResult> {
-    let result =
-        state.with_conn_mut(|conn| import_snapshot_json(conn, &args.payload, &args.mode))?;
+    // data.db never moves while the app runs, so reading its path under a
+    // separate lock is safe; the safety copy and the import then run under
+    // one lock so no other command can slip in between them.
+    let db_path = state.db_path()?;
+    let result = state.with_conn_mut(|conn| {
+        import_snapshot_json_guarded(conn, &db_path, &args.payload, &args.mode)
+    })?;
 
     emit_changed(&app, ChangedDomain::Categories);
     emit_changed(&app, ChangedDomain::Accounts);
