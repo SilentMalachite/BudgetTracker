@@ -14,20 +14,29 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # pnpm のバージョンは package.json の packageManager が正本。
       # ここで version を指定すると ERR_PNPM_BAD_PM_VERSION で衝突する。
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320  # v4.4.0
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'pnpm'
 
+      # OpenSSL の Windows ビルドに NASM が必要。ilammy/setup-nasm は Node.js 20
+      # ランタイムのまま更新が止まっているため、ランナー同梱の Chocolatey で入れる。
       - name: Install NASM (Windows)
         if: runner.os == 'Windows'
-        uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b  # v1.5.2
+        shell: pwsh
+        run: |
+          choco install nasm --no-progress -y
+          $exe = Get-ChildItem -Path 'C:\Program Files\NASM', 'C:\Program Files (x86)\NASM' `
+            -Filter nasm.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) { throw 'nasm.exe not found after choco install' }
+          & $exe.FullName -v
+          $exe.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772  # v1
         with:
