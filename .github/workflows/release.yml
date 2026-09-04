@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# draft release の作成と成果物添付に必要。
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS universal
+            os: macos-latest
+            target: universal-apple-darwin
+            rust_targets: x86_64-apple-darwin,aarch64-apple-darwin
+          - name: Windows x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            rust_targets: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      # pnpm のバージョンは package.json の packageManager が正本。
+      # ここで version を指定すると ERR_PNPM_BAD_PM_VERSION で衝突する。
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320  # v4.4.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      # OpenSSL の Windows ビルドに NASM が必要。ilammy/setup-nasm は Node.js 20
+      # ランタイムのまま更新が止まっているため、ランナー同梱の Chocolatey で入れる。
+      - name: Install NASM (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install nasm --no-progress -y
+          $exe = Get-ChildItem -Path 'C:\Program Files\NASM', 'C:\Program Files (x86)\NASM' `
+            -Filter nasm.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) { throw 'nasm.exe not found after choco install' }
+          & $exe.FullName -v
+          $exe.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772  # v1
+        with:
+          toolchain: stable
+          components: clippy
+          targets: ${{ matrix.rust_targets }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          workspaces: src-tauri
+
+      - name: Install JS deps
+        run: pnpm install --frozen-lockfile
+
+      # タグ文脈なので、3つのマニフェストに加えてタグ版数と CHANGELOG 見出しも検査される。
+      # 数十分のビルドを始める前にここで落とす。
+      - name: Release config check
+        run: pnpm release:check
+
+      - name: Type-check frontend
+        run: pnpm check
+
+      - name: Vitest
+        run: pnpm test
+
+      # tauri-build が frontendDist (../dist) を埋め込むため、cargo を動かす前に
+      # フロントを組んでおく必要がある。dist/ がないと clippy も test もコンパイルで落ちる。
+      - name: Build frontend
+        run: pnpm build
+
+      - name: Cargo clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+        working-directory: src-tauri
+
+      - name: Cargo test
+        run: cargo test --locked --no-fail-fast
+        working-directory: src-tauri
+
+      # Playwright はここでは走らせない。タグは ci.yml が緑になったコミットに打つ規約
+      # (docs/release-checklist.md) なので、同じコミットで既に通っている。
+      #
+      # ビルド・draft release の作成・成果物の添付は tauri-action に任せる。
+      # 両ジョブが同じ tagName / releaseDraft を指すので、同一の draft に添付される。
+      # 署名ステップは置かない (spec §6.2)。
+      - name: Build bundles and upload to draft release
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f  # action-v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tauriScript: pnpm tauri
+          tagName: v__VERSION__
+          releaseName: BudgetTracker v__VERSION__
+          releaseBody: |
+            公開前に CHANGELOG.md の該当セクションをここへ転記すること。
+
+            **未署名ビルドです。** 初回起動の手順は README のインストール節を参照:
+            - macOS: `.app` を右クリック → 開く
+            - Windows: SmartScreen の「詳細情報」→「実行」
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target }}
