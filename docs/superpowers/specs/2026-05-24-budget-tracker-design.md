@@ -439,7 +439,10 @@ Settings 画面もこの件数を「新規追加」と明示して表示する�
 - **「次回予定」表示**: 生成は行わず、UI で次回発生日をプレビューのみ
 - **ルール変更時の挙動**: 過去生成済みの取引はそのまま、未来の生成のみ新ルールで
 - **インデックス**: ルール別の生成履歴を引くため `transactions(recurring_id)` を追加する
-  （`V005__recurring_transaction_index.sql`）。`recurring_rules` 自体は V001 で作成済み
+  （`V005__recurring_transaction_index.sql`）。`recurring_rules` 自体は V001 で作成済み。
+  起動時の冪等な展開 (`expand_due_recurring()`) は有効なルールを `last_generated_on`
+  で絞って引くため、`recurring_rules(active, last_generated_on)` の複合インデックスも
+  追加する（`V006__recurring_rule_lookup_index.sql`）
 
 ### 5.5 口座・資産管理
 
@@ -589,6 +592,12 @@ transfer 入 +）を `WHERE a.archived_at IS NULL` 付きで月別に集計し�
 
 - 集計は `domain/report.rs` の純粋関数と `infra/repo/report_repo.rs` の SQL に置く。
   Svelte 側で差分・平均・移動平均・上位抽出を計算しない（規約2）
+- **インデックス**: レポート集計の主クエリは規約3どおり
+  `WHERE type IN ('income','expense')` で振替を除外したうえで期間を絞り込むが、
+  `idx_tx_budget_month_category(type, occurred_on, category_id)`（V003）が左端2列の
+  prefix としてこのアクセスパスを既にカバーする（`EXPLAIN QUERY PLAN` で確認済み）。
+  `transactions(type, occurred_on)` 単独の複合インデックスは書き込みコストを増やす
+  だけで検索計画を変えないため、意図して追加しない
 - Chart.js の生成 / 更新 / 破棄は `src/lib/components/Chart.svelte` の共通ラッパーに
   閉じる。Dashboard の月別収支グラフも同じラッパーに載せ替え、同じ定型を2箇所で持たない
 - タブ状態は `Reports.svelte` の `$state` に持ち、URL には載せない

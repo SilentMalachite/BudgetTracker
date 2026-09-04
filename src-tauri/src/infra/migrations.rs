@@ -230,6 +230,25 @@ mod tests {
     }
 
     #[test]
+    fn applies_v006_recurring_lookup_index() {
+        let mut conn = fresh();
+        let version = run(&mut conn).unwrap();
+        assert!(version >= 6, "expected V006 applied, got {version}");
+        let recurring_index: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                  WHERE type='index' AND name='idx_recurring_active_last_generated'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            recurring_index, 1,
+            "idx_recurring_active_last_generated index must exist after V006"
+        );
+    }
+
+    #[test]
     fn enforces_transfer_check_constraint() {
         let mut conn = fresh();
         run(&mut conn).unwrap();
