@@ -29,7 +29,6 @@ vi.mock('../lib/api/events', () => ({
 import { recurringExpansion } from '../lib/stores/recurringExpansion.svelte';
 import Recurring from './Recurring.svelte';
 
-const ORIGINAL_TZ = process.env.TZ;
 
 const view = {
   rule: {
@@ -55,12 +54,13 @@ const view = {
 describe('Recurring', () => {
   beforeAll(() => {
     // 正のオフセットを持つタイムゾーンでしか再現しないバグを固定する。
-    // process.env.TZ への代入で Node が tzset を呼び、V8 のキャッシュも落ちる。
-    process.env.TZ = 'Asia/Tokyo';
+    // stubEnv は process.env.TZ に代入するので Node が tzset を呼び、V8 のキャッシュも落ちる。
+    // process を直接触ると frontend の型に @types/node が要るため vi 経由にする。
+    vi.stubEnv('TZ', 'Asia/Tokyo');
   });
 
   afterAll(() => {
-    process.env.TZ = ORIGINAL_TZ;
+    vi.unstubAllEnvs();
   });
 
   beforeEach(() => {
