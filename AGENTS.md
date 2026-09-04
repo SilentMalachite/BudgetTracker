@@ -8,9 +8,10 @@ macOS / Windows 両対応の家計簿デスクトップアプリ。Tauri + Svelt
 
 ## 現在の状態
 
-- Phase 5b 完了 (分析レポート: 月次 / 年次 / カテゴリ別 / トレンドの4タブ + Reports 画面)
+- Phase 6a 完了 (リリース基盤: `pnpm release:check` + `release.yml` + `docs/release-checklist.md`)
+- **v0.1.0 を未署名で公開済み** (macOS `.dmg` / Windows `.msi` + `.exe`)。macOS は実機で起動確認済み、Windows は CI ビルド成功のみ
 - 既存の `家計簿.html` は参考用のプロトタイプ。**移植せず新規実装する**
-- 次は spec の Phase 6a (リリース基盤: release.yml + 版数同期 + v0.1.0 公開)
+- 次は spec の Phase 6c (Tauri WebView 上の E2E)。Excel は 6b
 
 ## 技術スタック
 

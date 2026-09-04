@@ -2,7 +2,7 @@
 
 macOS / Windows 両対応の家計簿デスクトップアプリ。Tauri + Svelte 5 + Rust + SQLite (SQLCipher) で構築。
 
-> ⚠️ **開発中** — 現在 **Phase 5b** (分析レポート4タブ) 完了。次は Phase 6a (リリース基盤)。
+> ⚠️ **開発中** — **Phase 6a** (リリース基盤) 完了。[v0.1.0](https://github.com/SilentMalachite/BudgetTracker/releases/tag/v0.1.0) を未署名で公開済み。次は Phase 6c (Tauri WebView 上の E2E)。
 
 ## 特長(設計目標)
 
@@ -137,7 +137,7 @@ src-tauri/src/
 - [x] **Phase 4** — 予算管理 (月別カテゴリ予算 + 進捗/警告バッジ)
 - [x] **Phase 5a** — 定期取引 (起動時の冪等な自動展開 + ルール管理)
 - [x] **Phase 5b** — 分析レポート (月次 / 年次 / カテゴリ別 / トレンドの4タブ)
-- [ ] **Phase 6a** — リリース基盤 (タグ push で配布ビルド → draft release)
+- [x] **Phase 6a** — リリース基盤 (タグ push で配布ビルド → draft release、v0.1.0 公開)
 - [ ] **Phase 6c** — Tauri WebView 上の E2E (WebdriverIO)
 - [ ] **Phase 6b** — Excel エクスポート / インポート
 
