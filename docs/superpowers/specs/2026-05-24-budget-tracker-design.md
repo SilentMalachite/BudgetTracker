@@ -665,7 +665,11 @@ transfer 入 +）を `WHERE a.archived_at IS NULL` 付きで月別に集計し�
 - **重点**: domain レイヤーの Rust ユニットテスト。金額計算と日付ロジックは間違えると致命的なので、property-based test (`proptest`) で境界をカバー
 - **TDD で進める**: 各機能の Rust domain ロジックは「先にテスト → 実装」サイクル
 - **CI**: PR 時に `pnpm release:check` `cargo clippy` `cargo test` `pnpm test` `svelte-check` と Playwright スモークをすべて緑にする。`release.yml` は Phase 6a
-- **Tauri WebView E2E (Phase 6c)**: `tauri-driver` 単体は Windows/Linux のみで macOS は有料フォークが要る。採るなら `@wdio/tauri-service` + `tauri-plugin-wdio-webdriver` の embedded driver で、外部ドライバなしに 3 OS とも動く。Playwright と並ぶ2本目のランナーとプラグイン2つを抱えるため、リリース (6a) と Excel (6b) の後に独立して判断する。それまで Tauri ウィンドウ上の確認は `pnpm tauri dev` の手動確認で代替する
+- **Tauri WebView E2E (Phase 6c)**: 採るなら `@wdio/tauri-service` + `tauri-plugin-wdio-webdriver` (ともに MIT) の **embedded driver** 一択。WebDriver サーバーをアプリ内で動かすため外部ドライバが要らず、**macOS を含む 3 OS すべてで無料で動く**。
+
+  他の2ルートを採らない理由: `tauri-driver` 単体 (Apache-2.0 OR MIT) は Windows/Linux のみ — Apple の `safaridriver` がアプリ組み込みの WKWebView を外部から操作できないため。その穴を埋める CrabNebula のクロスプラットフォームフォークは macOS に有料 API キーを要求する。embedded ルートはこの穴自体を通らない。
+
+  したがって 6c を後回しにする理由は費用ではなく、**Playwright と並ぶ2本目のランナーと Tauri プラグイン2つを常時抱えること**。リリース (6a) と Excel (6b) の後に採否から判断する。それまで Tauri ウィンドウ上の確認は `pnpm tauri dev` の手動確認で代替する
 
 ## 9. UI/UX 方針
 
