@@ -266,7 +266,7 @@ CREATE TABLE app_meta (
 
 - **CRUD**: 追加・編集・削除・フィルタ（種類/カテゴリ/口座/月/フリーワード）
 - **振替の扱い**: type='transfer' のとき category は NULL、counter_account_id を必須化
-- **既存HTML機能の継承**: JSON エクスポート/インポート（上書き/追記、検証エラーでロールバック）は現行。Excel インポート/エクスポートは Phase 4 では未実装で、Phase 6 以降に先送りする。スナップショットの `schema_version` は **backup format version 1** であり、`app_meta.schema_version` ではない。
+- **既存HTML機能の継承**: JSON エクスポート/インポート（上書き/追記、検証エラーでロールバック）は現行。Excel インポート/エクスポートは未実装で、**Phase 6b** に先送りする。スナップショットの `schema_version` は **backup format version 1** であり、`app_meta.schema_version` ではない。
 
 ### 5.3 予算管理
 
@@ -593,7 +593,7 @@ transfer 入 +）を `WHERE a.archived_at IS NULL` 付きで月別に集計し�
   閉じる。Dashboard の月別収支グラフも同じラッパーに載せ替え、同じ定型を2箇所で持たない
 - タブ状態は `Reports.svelte` の `$state` に持ち、URL には載せない
   （現行 router は `routePaths` の完全一致のみを扱う）
-- **エクスポート**: JSON は現行。Excel は Phase 6 以降。PDF出力は MVP 対象外
+- **エクスポート**: JSON は現行。Excel は **Phase 6b**。PDF出力は MVP 対象外
 
 ## 6. セキュリティ
 
@@ -619,7 +619,7 @@ transfer 入 +）を `WHERE a.archived_at IS NULL` 付きで月別に集計し�
 - **鍵紛失時**: 復号不能 → 「JSON エクスポートから復元してください」とガイド表示
 - **CSP 設定** (`tauri.conf.json`): `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'` で XSS 攻撃面を最小化
 - **Tauri allowlist**: `shell.open` `path.*` `fs.*` 等は使う部分のみ許可
-- **コード署名**: macOS は Developer ID + Apple Notarization、Windows は Authenticode で配布署名。署名証明書がない場合は未署名ビルドで配布（起動時警告は出るが動作する旨を README に明記）
+- **コード署名**: **MVP は未署名配布**。Apple Developer ID も Windows Authenticode 証明書も保有していないため、`release.yml` に署名ステップを置かない。証明書が揃うまで「secrets があれば署名する」条件分岐も書かない — 一度も実行されないコードパスは検証できず、いざ証明書を入れたときに壊れている。署名を導入する際に §7 とワークフローを同時に更新する
 
 ## 7. ビルド・配信
 
@@ -629,9 +629,29 @@ transfer 入 +）を `WHERE a.archived_at IS NULL` 付きで月別に集計し�
 | Windows | `.msi` + `.exe` (NSIS) | x86_64 のみ (MVP) |
 
 - **アプリ識別子**: `jp.budget-tracker.app` (macOS bundle identifier / Windows AppID)
-- **GitHub Actions ワークフロー**: タグ push (`v*`) で macOS Runner と Windows Runner で並列ビルド → GitHub Release に成果物添付
 - **自動アップデート**: MVP対象外。手動で新バージョン .dmg/.msi をダウンロード
 - **データの可搬性**: ユーザーがアプリ間でデータを移すには、JSON エクスポート → 別端末でインポートする手順を公式手順とする
+
+### 7.1 リリースワークフロー (Phase 6a)
+
+タグ push (`v*`) を唯一のトリガーとする。`.github/workflows/release.yml`:
+
+| 項目 | 決定 |
+|---|---|
+| ビルド実行 | `tauri-apps/tauri-action` に委ねる (`releaseDraft: true`, `tagName: v__VERSION__`) |
+| マトリクス | `macos-latest` → `--target universal-apple-darwin` / `windows-latest` → `--target x86_64-pc-windows-msvc` |
+| 成果物 | draft release に `.dmg` / `.msi` / `.exe` を添付。**publish は人間が手で行う** |
+| 検査順 | `pnpm release:check` → `pnpm check` → `pnpm test` → `cargo clippy --locked` → `cargo test --locked` の全緑がビルドの前提 |
+| Playwright | `release.yml` では走らせない。タグは `ci.yml` を通過済みのコミットに打つ。ブラウザ導入で数分伸びる割に、同じコミットで既に緑になっている |
+| 規約 | `ci.yml` と同じ。**actions は tauri-action も含めて全て SHA ピン + バージョンコメント**、Node 22、Windows の NASM は Chocolatey 経由 (`ilammy/setup-nasm` は Node.js 20 ランタイムのまま止まっている) |
+
+自前で `pnpm tauri build` + アセットアップロードを書かない理由: draft release の作成・複数ランナーからの同一 release への添付・`__VERSION__` の解決を公式アクションが持っており、手組みするとその3点が壊れやすい。
+
+**版数の正本は `package.json`。** `scripts/check-version-sync.mjs` が `package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` の3者一致を常に検査する。加えて **タグ文脈のときだけ** (`GITHUB_REF_NAME` が `v` 始まり)、タグ版数の一致と `CHANGELOG.md` に当該版の見出しがあることを検査する。CHANGELOG 検査を常時にしないのは、次版へ番号を上げてから内容を書き終えるまでの間、無関係な PR が全部赤くなるため。
+
+判定は純粋関数 `findVersionMismatches({ pkg, cargo, tauri, tag, changelogVersions })` に切り出し Vitest で境界 (タグなし / タグ不一致 / Cargo だけズレ / CHANGELOG 見出し欠落) を押さえる — ファイル読み出しは薄い殻に留める。`pnpm release:check` として `ci.yml` と `release.yml` の両方から走らせる。
+
+**未署名配布の受け渡し**: README にインストール手順として、macOS は初回のみ右クリック → 開く (または `xattr -d com.apple.quarantine <app>`)、Windows は SmartScreen の「詳細情報」→「実行」を明記する。リリースノートにも同じ注意を載せる。
 
 ## 8. テスト戦略
 
@@ -640,11 +660,12 @@ transfer 入 +）を `WHERE a.archived_at IS NULL` 付きで月別に集計し�
 | Rust unit | `cargo test` | domain/ の純粋関数 (予算評価、定期展開ロジック、レポート集計) |
 | Rust 統合 | `cargo test` + `rusqlite` メモリDB | commands/ + DB マイグレーション |
 | Svelte unit | Vitest + @testing-library/svelte | ストア、ユーティリティ、コンポーネント |
-| E2E | Playwright（Vite `pnpm dev` + Tauri invoke mock）。`tauri-driver` による Tauri WebView E2E は Phase 6 | 主要ユーザーフローのスモーク (取引追加→予算反映 等) |
+| E2E | Playwright（Vite `pnpm dev` + Tauri invoke mock）。Tauri WebView 上の E2E は **Phase 6c** | 主要ユーザーフローのスモーク (取引追加→予算反映 等) |
 
 - **重点**: domain レイヤーの Rust ユニットテスト。金額計算と日付ロジックは間違えると致命的なので、property-based test (`proptest`) で境界をカバー
 - **TDD で進める**: 各機能の Rust domain ロジックは「先にテスト → 実装」サイクル
-- **CI**: PR 時に `cargo clippy` `cargo test` `pnpm test` `svelte-check` と Playwright スモークをすべて緑にする。`release.yml` は Phase 6
+- **CI**: PR 時に `pnpm release:check` `cargo clippy` `cargo test` `pnpm test` `svelte-check` と Playwright スモークをすべて緑にする。`release.yml` は Phase 6a
+- **Tauri WebView E2E (Phase 6c)**: `tauri-driver` 単体は Windows/Linux のみで macOS は有料フォークが要る。採るなら `@wdio/tauri-service` + `tauri-plugin-wdio-webdriver` の embedded driver で、外部ドライバなしに 3 OS とも動く。Playwright と並ぶ2本目のランナーとプラグイン2つを抱えるため、リリース (6a) と Excel (6b) の後に独立して判断する。それまで Tauri ウィンドウ上の確認は `pnpm tauri dev` の手動確認で代替する
 
 ## 9. UI/UX 方針
 
@@ -656,7 +677,7 @@ transfer 入 +）を `WHERE a.archived_at IS NULL` 付きで月別に集計し�
 
 ## 10. 実装フェーズ分割
 
-設計は1スペックにまとめるが、実装計画は writing-plans スキルにて以下5フェーズに分割する想定：
+設計は1スペックにまとめるが、実装計画は writing-plans スキルにてフェーズごとに分割する：
 
 | Phase | 内容 | 完了基準 |
 |---|---|---|
@@ -666,8 +687,21 @@ transfer 入 +）を `WHERE a.archived_at IS NULL` 付きで月別に集計し�
 | 4 | 予算管理 | 予算設定、進捗バー、超過アラート |
 | 5a | 定期取引 | 起動時自動展開、Recurring ルート |
 | 5b | 分析レポート強化 | レポート4タブ |
+| 6a | リリース基盤 (§7.1) | **v0.1.0 を実際に公開する** |
+| 6b | Excel エクスポート / インポート | 未着手。着手前に §5.2 を確定させる |
+| 6c | Tauri WebView E2E (§8) | 未着手。採否から判断する |
 
 各フェーズの完了時に動作確認 → 次フェーズへ進む。CI緑化と E2E テスト最低1本を各フェーズの完了条件とする。
+
+**Phase 6a の完了基準**（機構が揃っただけでは完了としない。未検証のリリース手順は手順書ではない）:
+
+1. `pnpm release:check` を `ci.yml` に組み込んだうえで CI が緑
+2. `v0.1.0` タグ push で Release ワークフローが macOS / Windows 両方成功
+3. draft release に `.dmg` と `.msi`（NSIS 出力があれば `.exe`）が並ぶ
+4. macOS 実機で `.dmg` をダウンロードし、README の未署名回避手順どおりに起動 → DB 初期化と取引追加が通る
+5. `CHANGELOG.md` からリリースノートを転記して publish
+
+Windows 実機がない場合、4 は CI のビルド成功をもって代替し、Windows 側が実機未検証であることをリリースノートに明記する。
 
 ## 11. 既知のリスクと対応
 
@@ -695,3 +729,4 @@ transfer 入 +）を `WHERE a.archived_at IS NULL` 付きで月別に集計し�
 - 2026-09-03: Phase 5 を 5a (定期取引) / 5b (レポート強化) に分割し、§5.4 に展開の実行位置・日付生成規則・アーカイブ参照時の扱い・コマンド一覧を確定
 - 2026-09-03: §5.4 にバックアップ追記時の定期取引ルールの同一性キーとマージ規則 (watermark は新しい方、`ends_on`/`active`/`description` は取り込み先) を追記
 - 2026-09-03: §5.6 を Phase 5b 実装向けに確定。レンジ型の期間モデル、4コマンドの戻り値、純資産推移を非アーカイブ口座のみで定義 (振替相殺が崩れるため月次増減は 4 方向集計)、移動平均は月次 net に対してかけ point に同居、カテゴリ推移は円グラフのクリックで切替 (再 invoke なし)、Chart.js は共通ラッパーに集約
+- 2026-09-04: Phase 6 を 6a (リリース基盤) / 6b (Excel) / 6c (Tauri WebView E2E) に分割。§6.2 のコード署名を「MVP は未署名配布、条件分岐も書かない」に確定し、§7.1 にリリースワークフロー (tauri-action + 版数同期検査 + 未署名回避手順) を新設。§8 の `tauri-driver` 記述を `@wdio/tauri-service` の embedded driver (3 OS 対応) に更新し 6c へ移送。§10 に 6a の完了基準を「v0.1.0 を実際に公開する」として明記
