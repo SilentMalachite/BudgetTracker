@@ -110,4 +110,6 @@ jobs:
             - Windows: SmartScreen の「詳細情報」→「実行」
           releaseDraft: true
           prerelease: false
+          # 自動アップデートは MVP 対象外 (spec §7) なので、更新マニフェストを draft に置かない。
+          uploadUpdaterJson: false
           args: --target ${{ matrix.target }}

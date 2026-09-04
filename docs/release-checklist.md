@@ -7,6 +7,8 @@
 ## 1. 事前確認
 
 - [ ] `main` の最新コミットで CI (`.github/workflows/ci.yml`) が緑
+- [ ] これから打つタグが `origin` にまだ無く、同じタグの draft release も残っていない
+      → `git ls-remote --tags origin` / `gh release list`
 - [ ] `CHANGELOG.md` の `[Unreleased]` の内容を、これから出す版の見出しへ移した
 - [ ] `CHANGELOG.md` の該当版の日付が、実際に公開する日になっている
 - [ ] `package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` の版数が揃っている
@@ -17,6 +19,8 @@
 
 ## 2. タグ
 
+- [ ] タグ文脈のリリースチェックを通す (`v0.1.0` は実際に出す版数に読み替える):
+      `GITHUB_REF_NAME=v0.1.0 pnpm release:check`
 - [ ] 注釈付きタグを作る: `git tag -a v0.1.0 -m "Release v0.1.0"`
 - [ ] push する: `git push origin v0.1.0`
 
@@ -44,6 +48,8 @@
 
 - [ ] `CHANGELOG.md` に空の `## [Unreleased]` を戻す
 - [ ] `CHANGELOG.md` 末尾のリンク定義を新しい版に合わせて更新する
+- [ ] `README.md` の状態バナー (`> ⚠️ **開発中**`) とロードマップ節を公開後の状態に更新する
+- [ ] `CLAUDE.md` の「現在の状態」節を更新する
 
 ## 署名について
 
