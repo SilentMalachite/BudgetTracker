@@ -665,11 +665,29 @@ transfer 入 +）を `WHERE a.archived_at IS NULL` 付きで月別に集計し�
 - **重点**: domain レイヤーの Rust ユニットテスト。金額計算と日付ロジックは間違えると致命的なので、property-based test (`proptest`) で境界をカバー
 - **TDD で進める**: 各機能の Rust domain ロジックは「先にテスト → 実装」サイクル
 - **CI**: PR 時に `pnpm release:check` `cargo clippy` `cargo test` `pnpm test` `svelte-check` と Playwright スモークをすべて緑にする。`release.yml` は Phase 6a
-- **Tauri WebView E2E (Phase 6c)**: 採るなら `@wdio/tauri-service` + `tauri-plugin-wdio-webdriver` (ともに MIT) の **embedded driver** 一択。WebDriver サーバーをアプリ内で動かすため外部ドライバが要らず、**macOS を含む 3 OS すべてで無料で動く**。
 
-  他の2ルートを採らない理由: `tauri-driver` 単体 (Apache-2.0 OR MIT) は Windows/Linux のみ — Apple の `safaridriver` がアプリ組み込みの WKWebView を外部から操作できないため。その穴を埋める CrabNebula のクロスプラットフォームフォークは macOS に有料 API キーを要求する。embedded ルートはこの穴自体を通らない。
+### 8.1 Tauri WebView E2E (Phase 6c)
 
-  したがって 6c を後回しにする理由は費用ではなく、**Playwright と並ぶ2本目のランナーと Tauri プラグイン2つを常時抱えること**。リリース (6a) と Excel (6b) の後に採否から判断する。それまで Tauri ウィンドウ上の確認は `pnpm tauri dev` の手動確認で代替する
+**採用ルートは `@wdio/tauri-service` + `tauri-plugin-wdio` + `tauri-plugin-wdio-webdriver` (すべて MIT / Apache-2.0) の embedded driver。** WebDriver サーバーをアプリのプロセス内で動かすため外部ドライバが要らず、**macOS を含む 3 OS すべてで無料**。
+
+他の2ルートを採らない理由: `tauri-driver` 単体は Windows/Linux のみ — Apple の `safaridriver` がアプリ組み込みの WKWebView を外部から操作できないため。その穴を埋める CrabNebula のフォークは macOS に有料 API キーを要求する。embedded ルートはこの穴自体を通らない。
+
+**プラグインは Cargo feature `wdio` で切り離す (必須)。**
+
+```toml
+[features]
+wdio = ["dep:tauri-plugin-wdio", "dep:tauri-plugin-wdio-webdriver"]
+
+[dependencies]
+tauri-plugin-wdio = { version = "1", optional = true }
+tauri-plugin-wdio-webdriver = { version = "1", optional = true }
+```
+
+登録は `#[cfg(feature = "wdio")]` で囲む。**公式ドキュメントが先に挙げる `#[cfg(debug_assertions)]` は採らない** — それだと `pnpm tauri dev` のたびにポート 4445 で WebDriver サーバーが立つ。開発機には本物の家計データが入った暗号化 DB があり、そこへ常時待ち受けの遠隔操作口を開けることになる。feature flag なら `--features wdio` と明示したときにしか存在しない。`pnpm tauri build` の既定ビルドにはコード自体が入らない。
+
+**6c は 6a のリリースゲートにはならない。** E2E が動かすのは `--features wdio` 付きでビルドしたバイナリで、ユーザーがダウンロードする `.dmg` の中身とは別物だから。6c が買うのは「実物の WebView (macOS = WKWebView / Windows = WebView2) で動かす」こと — CSP の実挙動、IPC、フォントとレイアウト差など Playwright の Chromium + invoke モックでは触れない層である。
+
+**順序は 6a → 6c → 6b。** 6c を 6b の前に置くのは、Excel (6b) の UI 実装を最初から実 WebView の網の下で進めるため。Playwright は引き続きスモークとして残し、6c で置き換えない (ブラウザ側は速く、モックが効く)。
 
 ## 9. UI/UX 方針
 
@@ -692,8 +710,10 @@ transfer 入 +）を `WHERE a.archived_at IS NULL` 付きで月別に集計し�
 | 5a | 定期取引 | 起動時自動展開、Recurring ルート |
 | 5b | 分析レポート強化 | レポート4タブ |
 | 6a | リリース基盤 (§7.1) | **v0.1.0 を実際に公開する** |
+| 6c | Tauri WebView E2E (§8.1) | `--features wdio` で 3 OS のうち最低 macOS のスモークが緑 |
 | 6b | Excel エクスポート / インポート | 未着手。着手前に §5.2 を確定させる |
-| 6c | Tauri WebView E2E (§8) | 未着手。採否から判断する |
+
+**6c を 6b より先に置く。** 理由は §8.1。6a より後なのは、6c が 6a の出荷バイナリを検証できず (別ビルドになる) リリースゲートとして働かないため — 6a を待たせる意味がない。
 
 各フェーズの完了時に動作確認 → 次フェーズへ進む。CI緑化と E2E テスト最低1本を各フェーズの完了条件とする。
 
@@ -734,3 +754,4 @@ Windows 実機がない場合、4 は CI のビルド成功をもって代替し
 - 2026-09-03: §5.4 にバックアップ追記時の定期取引ルールの同一性キーとマージ規則 (watermark は新しい方、`ends_on`/`active`/`description` は取り込み先) を追記
 - 2026-09-03: §5.6 を Phase 5b 実装向けに確定。レンジ型の期間モデル、4コマンドの戻り値、純資産推移を非アーカイブ口座のみで定義 (振替相殺が崩れるため月次増減は 4 方向集計)、移動平均は月次 net に対してかけ point に同居、カテゴリ推移は円グラフのクリックで切替 (再 invoke なし)、Chart.js は共通ラッパーに集約
 - 2026-09-04: Phase 6 を 6a (リリース基盤) / 6b (Excel) / 6c (Tauri WebView E2E) に分割。§6.2 のコード署名を「MVP は未署名配布、条件分岐も書かない」に確定し、§7.1 にリリースワークフロー (tauri-action + 版数同期検査 + 未署名回避手順) を新設。§8 の `tauri-driver` 記述を `@wdio/tauri-service` の embedded driver (3 OS 対応) に更新し 6c へ移送。§10 に 6a の完了基準を「v0.1.0 を実際に公開する」として明記
+- 2026-09-04: §8.1 を新設し 6c の順序を 6b の前へ (6a → 6c → 6b)。WebdriverIO プラグインは Cargo feature `wdio` で切り離すことを必須と決定 (`#[cfg(debug_assertions)]` は `pnpm tauri dev` のたびに WebDriver サーバーが立つため不採用)。6c は出荷バイナリと別ビルドを検証するのでリリースゲートにはしない
