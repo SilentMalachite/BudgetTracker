@@ -51,6 +51,11 @@ jobs:
       - name: Install JS deps
         run: pnpm install --frozen-lockfile
 
+      # 3つのマニフェストの版数がズレたまま進まないよう、型検査より先に落とす。
+      # CHANGELOG の検査はタグ文脈のときだけ走る (scripts/version-sync.mjs)。
+      - name: Release config check
+        run: pnpm release:check
+
       - name: Type-check frontend
         run: pnpm check
 
