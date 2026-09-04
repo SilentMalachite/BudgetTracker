@@ -629,7 +629,8 @@ transfer 入 +）を `WHERE a.archived_at IS NULL` 付きで月別に集計し�
 | Windows | `.msi` + `.exe` (NSIS) | x86_64 のみ (MVP) |
 
 - **アプリ識別子**: `jp.budget-tracker.app` (macOS bundle identifier / Windows AppID)
-- **自動アップデート**: MVP対象外。手動で新バージョン .dmg/.msi をダウンロード
+- **バンドル対象**: `tauri.conf.json` の `bundle.targets` は上表と一致する明示列挙 `["dmg", "msi", "nsis"]` とする。`"all"` にすると macOS で更新用アーカイブ `.app.tar.gz` まで draft release に並び、ユーザーがどれを落とせばよいか分からなくなる。配布形式を増減するときは上表と `bundle.targets` を同時に直す
+- **自動アップデート**: MVP対象外。手動で新バージョン .dmg/.msi をダウンロード。`plugins.updater` は設定せず、`release.yml` では `uploadUpdaterJson: false` を明示して更新マニフェスト (`latest.json`) を release に置かない — 存在しない更新エンドポイントを広告しないため
 - **データの可搬性**: ユーザーがアプリ間でデータを移すには、JSON エクスポート → 別端末でインポートする手順を公式手順とする
 
 ### 7.1 リリースワークフロー (Phase 6a)
